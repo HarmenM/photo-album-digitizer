@@ -23,6 +23,9 @@
                 {{ item.status === 'saved' ? '✓' : 'ℹ' }}
               </span>
             }
+            @if ((i === currentIndex() ? quads().length : (item.quads?.length ?? 0)); as n) {
+              <span class="count-badge" title="{{ n }} photo(s) will be cropped">{{ n }}</span>
+            }
             <span
               class="thumb-remove"
               (click)="removeImage(i, $event)"
@@ -86,26 +89,37 @@
         </button>
         <button
           (click)="correctBoundaries()"
-          [disabled]="corners().length !== 4 || mode() === 'processing'"
-          title="Snap each corner to the strongest contrast edge within 50 px (shortcut: C)"
+          [disabled]="activeIdx() < 0 || mode() === 'processing'"
+          title="Snap each corner of the active rectangle to the strongest contrast edge within 50 px (shortcut: C)"
         >
           <span class="material-symbols-outlined">center_focus_strong</span> Correct boundaries
         </button>
         <button
           (click)="shrinkQuad()"
-          [disabled]="corners().length !== 4 || mode() === 'processing'"
-          title="Move every edge of the selection 10 px inward (shortcut: S)"
+          [disabled]="activeIdx() < 0 || mode() === 'processing'"
+          title="Move every edge of the active rectangle 10 px inward (shortcut: S)"
         >
           <span class="material-symbols-outlined">zoom_in_map</span> Shrink 10 px
         </button>
-        <button (click)="clearCorners()" [disabled]="corners().length === 0 || mode() === 'processing'">
-          <span class="material-symbols-outlined">layers_clear</span> Clear corners
+        <button
+          (click)="deleteActive()"
+          [disabled]="(activeIdx() < 0 && !draft().length) || mode() === 'processing'"
+          title="Delete the active rectangle (shortcut: Delete)"
+        >
+          <span class="material-symbols-outlined">delete</span> Delete
+        </button>
+        <button
+          (click)="clearCorners()"
+          [disabled]="(!quads().length && !draft().length) || mode() === 'processing'"
+          title="Remove all rectangles"
+        >
+          <span class="material-symbols-outlined">layers_clear</span> Clear all
         </button>
         <button
           class="primary"
           (click)="apply()"
-          [disabled]="corners().length !== 4 || mode() === 'processing'"
-          [title]="'Crop & rectify using these corners (shortcut: ' + confirmKey + ')'"
+          [disabled]="!quads().length || mode() === 'processing'"
+          [title]="'Crop & rectify every rectangle (shortcut: ' + confirmKey + ')'"
         >
           <span class="material-symbols-outlined">crop</span> Apply
         </button>
@@ -138,7 +152,12 @@
     <section class="screen" [style.display]="mode() === 'result' ? '' : 'none'">
       <div class="toolbar">
         @if (outSize(); as s) {
-          <span class="hint">Rectified — {{ s.w }} × {{ s.h }} px</span>
+          <span class="hint">
+            Rectified — {{ s.w }} × {{ s.h }} px
+            @if (resultCount() > 1) {
+              · photo {{ resultIndex() + 1 }} / {{ resultCount() }}
+            }
+          </span>
         }
         <button (click)="rotate(-1)" title="Rotate 90° left (shortcut: L)">
           <span class="material-symbols-outlined">rotate_left</span> Rotate left

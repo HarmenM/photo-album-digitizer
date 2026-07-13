@@ -12,15 +12,17 @@ photobook shot with a camera or phone).
 1. **Add photos** to the app (multi-image queue with a thumbnail drawer; images
    are added via file picker or drag-and-drop).
 2. **Mark boundaries**: when a photo is active, place/adjust the boundary
-   corners around the picture.
+   corners around each picture — an album page may hold several pictures,
+   each getting its own rectangle.
 3. Then choose one of two paths:
 
 ### Path 1 — Image preview
 
-- Shows the rectified image, warped from the boundaries/corners provided.
-- Add metadata: **date** and **description**.
+- Shows the rectified pictures one at a time, warped from the
+  boundaries/corners provided.
+- Add metadata per picture: **date** and **description**.
 - Scratchpad entries can be used to quick-fill the metadata (clickable chips).
-- Download/save the image with its metadata.
+- Download/save each picture with its metadata.
 
 ### Path 2 — Info scratchpad
 

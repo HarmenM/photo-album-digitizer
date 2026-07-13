@@ -1,5 +1,5 @@
 import { Component, ElementRef, HostListener, computed, effect, signal, viewChild } from '@angular/core';
-import { detectPageCorners, snapCornersToEdges } from './corner-detect';
+import { detectPageCorners, detectPhotoRects, snapCornersToEdges } from './corner-detect';
 import { parseSpokenDate, readExifDate } from './exif';
 import { Point, computeHomography, insetQuad, sortCorners, warpPerspective } from './homography';
 import { buildXmpSidecar } from './xmp';
@@ -14,7 +14,7 @@ interface QueueItem {
   thumb: string; // small dataURL, '' while still generating
   status: ImageStatus;
   rotation: number; // clockwise quarter turns applied in the editor: 0/90/180/270
-  corners?: Point[]; // last corner positions; undefined = never visited (auto-detect)
+  quads?: Point[][]; // last photo rectangles; undefined = never visited (auto-detect)
 }
 
 interface ScratchEntry {
@@ -59,9 +59,16 @@ const DEFAULT_TIME = '12:00:00';
 export class App {
   protected readonly mode = signal<Mode>('idle');
   protected readonly dragOver = signal(false);
-  protected readonly corners = signal<Point[]>([]);
+  // photo rectangles on the current image; one is active and editable
+  protected readonly quads = signal<Point[][]>([]);
+  protected readonly draft = signal<Point[]>([]); // manually clicked corners, < 4
+  protected readonly activeIdx = signal(-1);
   protected readonly progress = signal(0);
   protected readonly outSize = signal<{ w: number; h: number } | null>(null);
+  // rectified photos of the current image, shown one at a time
+  private results: HTMLCanvasElement[] = [];
+  protected readonly resultIndex = signal(0);
+  protected readonly resultCount = signal(0);
 
   // image queue
   protected readonly images = signal<QueueItem[]>([]);
@@ -106,8 +113,11 @@ export class App {
   protected readonly loupeVisible = signal(false);
 
   protected readonly hint = computed(() => {
-    const n = this.corners().length;
-    return n < 4 ? `Click the corners of the page — ${4 - n} to go` : '';
+    const d = this.draft().length;
+    if (d > 0) return `Click the corners of a photo — ${4 - d} to go`;
+    const n = this.quads().length;
+    if (n === 0) return 'Click the corners of a photo — 4 to go';
+    return `${n} photo${n > 1 ? 's' : ''} selected`;
   });
 
   private readonly editCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('editCanvas');
@@ -123,6 +133,7 @@ export class App {
   private viewScale = 1;
   private renderScale = 1; // image px -> canvas backing-store px
   private dragIndex = -1;
+  private dragKind: 'quad' | 'draft' = 'quad';
   private edgeDrag: EdgeDrag | null = null;
   private editPan: {
     clientX: number;
@@ -253,20 +264,24 @@ export class App {
     return rotated;
   }
 
-  /** Remember the current image's corners so they survive switching away. */
-  private stashCorners(): void {
+  /** Remember the current image's rectangles so they survive switching away. */
+  private stashQuads(): void {
     const idx = this.currentIndex();
     if (idx < 0 || !this.image) return;
-    const pts = this.corners().map((p) => ({ ...p }));
-    this.images.update((list) => list.map((it, i) => (i === idx ? { ...it, corners: pts } : it)));
+    const qs = this.quads().map((q) => q.map((p) => ({ ...p })));
+    this.images.update((list) => list.map((it, i) => (i === idx ? { ...it, quads: qs } : it)));
   }
 
   protected async openImage(index: number): Promise<void> {
     const item = this.images()[index];
     if (!item || this.mode() === 'processing') return;
-    this.stashCorners();
+    this.stashQuads();
     const token = ++this.openToken;
     this.currentIndex.set(index);
+    // empty state (and thumb count) for the new item while it decodes
+    this.quads.set([]);
+    this.draft.set([]);
+    this.activeIdx.set(-1);
     this.revokeInfoUrl();
     let bmp: ImageBitmap;
     try {
@@ -289,8 +304,11 @@ export class App {
     this.image?.close();
     this.image = bmp;
     this.baseName = item.name.replace(/\.[^.]+$/, '') || 'photo';
-    const stored = item.corners;
-    this.corners.set(stored ? stored.map((p) => ({ ...p })) : []);
+    const stored = item.quads;
+    this.quads.set(stored ? stored.map((q) => q.map((p) => ({ ...p }))) : []);
+    this.activeIdx.set(stored?.length ? 0 : -1);
+    this.results = [];
+    this.resultCount.set(0);
     this.outSize.set(null);
     this.photoDate.set(null);
     this.setVoiceStatus(null);
@@ -351,25 +369,35 @@ export class App {
   }
 
   /**
-   * Try to detect the page corners automatically. On the first visit of an
-   * image (manual = false) the detection is refined further: snap the corners
-   * to the full-res contrast boundary, then step 5 px inward so the default
-   * crop carries no background sliver. The D shortcut / toolbar button runs
-   * the plain detection only.
+   * Detect all photographs on the image automatically (falling back to the
+   * single page outline when none are found). On the first visit of an image
+   * (manual = false) every detected rectangle is refined further: snap the
+   * corners to the full-res contrast boundary, then step 5 px inward so the
+   * default crop carries no background sliver. The D shortcut / toolbar
+   * button runs the plain detection only.
    */
   protected autoDetect(manual = true): void {
     const img = this.image;
     if (!img || this.mode() !== 'edit') return;
-    const found = detectPageCorners(img);
-    if (found) {
-      this.corners.set(found);
+    let found = detectPhotoRects(img);
+    if (!found.length) {
+      const page = detectPageCorners(img);
+      if (page) found = [page];
+    }
+    if (found.length) {
+      this.draft.set([]);
       if (!manual) {
-        this.correctBoundaries();
-        this.shrinkBy(5);
+        found = found.map((q) => {
+          const snapped = snapCornersToEdges(img, q).map((p) => this.clampToImage(p));
+          const inset = insetQuad(sortCorners(snapped), 5);
+          return inset ? inset.map((p) => this.clampToImage(p)) : snapped;
+        });
       }
+      this.quads.set(found);
+      this.activeIdx.set(0);
       this.redraw();
     } else if (manual) {
-      alert('Could not detect the page corners automatically — please click them manually.');
+      alert('Could not detect any photos automatically — please click their corners manually.');
     }
   }
 
@@ -427,30 +455,50 @@ export class App {
   }
 
   /**
-   * Snap each corner onto the photo's contrast boundary, searching a 50 px
-   * box around it. Runs automatically once boundaries are set (auto-detect,
-   * fourth click) but never after a manual drag — the loupe exists for
-   * deliberate placement, and snapping would fight it.
+   * Snap each corner of the active rectangle onto the photo's contrast
+   * boundary, searching a 50 px box around it. Runs automatically on every
+   * newly completed rectangle (auto-detect, fourth click) but never after a
+   * manual drag — the loupe exists for deliberate placement, and snapping
+   * would fight it.
    */
   protected correctBoundaries(): void {
     const img = this.image;
-    if (!img || this.mode() !== 'edit' || this.corners().length !== 4) return;
-    this.corners.set(snapCornersToEdges(img, this.corners()).map((p) => this.clampToImage(p)));
+    const a = this.activeIdx();
+    if (!img || this.mode() !== 'edit' || a < 0) return;
+    const snapped = snapCornersToEdges(img, this.quads()[a]).map((p) => this.clampToImage(p));
+    this.quads.update((qs) => qs.map((q, i) => (i === a ? snapped : q)));
     this.redraw();
   }
 
-  /** Move every edge of the corner quad 10 px inward. */
+  /** Move every edge of the active rectangle 10 px inward. */
   protected shrinkQuad(): void {
     this.shrinkBy(10);
   }
 
   private shrinkBy(d: number): void {
-    if (this.mode() !== 'edit' || this.corners().length !== 4 || !this.image) return;
-    const inset = insetQuad(sortCorners(this.corners()), d);
+    const a = this.activeIdx();
+    if (this.mode() !== 'edit' || a < 0 || !this.image) return;
+    const inset = insetQuad(sortCorners(this.quads()[a]), d);
     if (inset) {
-      this.corners.set(inset.map((p) => this.clampToImage(p)));
+      const clamped = inset.map((p) => this.clampToImage(p));
+      this.quads.update((qs) => qs.map((q, i) => (i === a ? clamped : q)));
       this.redraw();
     }
+  }
+
+  /** Delete the in-progress draft corners, or else the active rectangle. */
+  protected deleteActive(): void {
+    if (this.mode() !== 'edit') return;
+    if (this.draft().length) {
+      this.draft.set([]);
+      this.redraw();
+      return;
+    }
+    const a = this.activeIdx();
+    if (a < 0) return;
+    this.quads.update((qs) => qs.filter((_, i) => i !== a));
+    this.activeIdx.set(this.quads().length ? Math.min(a, this.quads().length - 1) : -1);
+    this.redraw();
   }
 
   // --- speech input -----------------------------------------------------------
@@ -615,6 +663,8 @@ export class App {
 
   protected backToEdit(): void {
     this.revokeInfoUrl();
+    this.results = []; // discard pending rectified photos
+    this.resultCount.set(0);
     this.resetZoom();
     this.mode.set('edit');
     requestAnimationFrame(() => this.layoutEditCanvas());
@@ -696,6 +746,9 @@ export class App {
     else if (key === 's' && this.mode() === 'edit') this.shrinkQuad();
     else if (key === 'c' && this.mode() === 'edit') this.correctBoundaries();
     else if (key === 'i' && this.mode() === 'edit') this.useInfo();
+    else if ((ev.key === 'Delete' || ev.key === 'Backspace') && this.mode() === 'edit') {
+      this.deleteActive();
+    }
   }
 
   /** Rotate the current image by 90°; dir 1 = clockwise (right), -1 = counter-clockwise (left). */
@@ -730,10 +783,10 @@ export class App {
     const rotated = await createImageBitmap(c);
     img.close();
     this.image = rotated;
-    // carry the already-placed corners along with the rotation
-    this.corners.update((cs) =>
-      cs.map((p) => (dir === 1 ? { x: oldH - p.y, y: p.x } : { x: p.y, y: oldW - p.x })),
-    );
+    // carry the already-placed rectangles and draft corners along with the rotation
+    const mapPt = (p: Point) => (dir === 1 ? { x: oldH - p.y, y: p.x } : { x: p.y, y: oldW - p.x });
+    this.quads.update((qs) => qs.map((q) => q.map(mapPt)));
+    this.draft.update((ds) => ds.map(mapPt));
     // persist the rotation on the queue item and refresh its thumbnail
     const idx = this.currentIndex();
     if (this.images()[idx]) {
@@ -775,11 +828,13 @@ export class App {
     if (this.mode() !== 'edit' || !this.image) return;
     const p = this.toImagePoint(ev);
     const hit = this.hitCorner(p);
-    if (hit >= 0) {
-      this.dragIndex = hit;
+    if (hit) {
+      this.dragKind = hit.kind;
+      this.dragIndex = hit.idx;
       this.editCanvas().nativeElement.setPointerCapture(ev.pointerId);
       this.loupeVisible.set(true);
-      this.updateLoupe(ev, this.corners()[hit]);
+      const pts = hit.kind === 'draft' ? this.draft() : this.quads()[this.activeIdx()];
+      this.updateLoupe(ev, pts[hit.idx]);
       return;
     }
     const edge = this.hitEdgeHandle(p);
@@ -788,8 +843,15 @@ export class App {
       this.editCanvas().nativeElement.setPointerCapture(ev.pointerId);
       return;
     }
+    // clicking inside another rectangle activates it
+    const qi = this.quadAt(p);
+    if (qi >= 0 && qi !== this.activeIdx()) {
+      this.activeIdx.set(qi);
+      this.redraw();
+      return;
+    }
     // empty area: drag pans the view, a plain click (below the movement
-    // threshold) still places a corner on release
+    // threshold) still places a draft corner on release
     const host = this.canvasHost().nativeElement;
     this.editPan = {
       clientX: ev.clientX,
@@ -807,7 +869,14 @@ export class App {
     if (this.dragIndex >= 0) {
       const p = this.clampToImage(this.toImagePoint(ev));
       const idx = this.dragIndex;
-      this.corners.update((c) => c.map((q, i) => (i === idx ? p : q)));
+      if (this.dragKind === 'draft') {
+        this.draft.update((c) => c.map((q, i) => (i === idx ? p : q)));
+      } else {
+        const a = this.activeIdx();
+        this.quads.update((qs) =>
+          qs.map((q, qi) => (qi === a ? q.map((pt, i) => (i === idx ? p : pt)) : q)),
+        );
+      }
       this.redraw();
       this.updateLoupe(ev, p);
     } else if (this.editPan) {
@@ -830,31 +899,40 @@ export class App {
       t = Math.min(Math.max(t, d.tMin), d.tMax);
       const movedA = { x: d.startA.x + t * d.normal.x, y: d.startA.y + t * d.normal.y };
       const movedB = { x: d.startB.x + t * d.normal.x, y: d.startB.y + t * d.normal.y };
-      this.corners.update((c) =>
-        c.map((q, i) => (i === d.rawA ? movedA : i === d.rawB ? movedB : q)),
+      const a = this.activeIdx();
+      this.quads.update((qs) =>
+        qs.map((q, qi) =>
+          qi === a ? q.map((pt, i) => (i === d.rawA ? movedA : i === d.rawB ? movedB : pt)) : q,
+        ),
       );
       this.redraw();
     } else {
       const canvas = this.editCanvas().nativeElement;
       const p = this.toImagePoint(ev);
-      canvas.style.cursor =
-        this.hitCorner(p) >= 0
-          ? 'grab'
-          : this.hitEdgeHandle(p)
-            ? 'move'
-            : this.corners().length < 4
-              ? 'crosshair'
-              : 'grab';
+      const qi = this.quadAt(p);
+      canvas.style.cursor = this.hitCorner(p)
+        ? 'grab'
+        : this.hitEdgeHandle(p)
+          ? 'move'
+          : qi >= 0 && qi !== this.activeIdx()
+            ? 'pointer'
+            : 'crosshair';
     }
   }
 
   protected onPointerUp(ev: PointerEvent): void {
     if (this.editPan) {
-      if (!this.editPan.moved && this.corners().length < 4) {
+      if (!this.editPan.moved) {
         const p = this.clampToImage(this.editPan.imgPoint);
-        this.corners.update((c) => [...c, p]);
-        // the fourth click completes the boundary — snap all corners to it
-        if (this.corners().length === 4) this.correctBoundaries();
+        this.draft.update((c) => [...c, p]);
+        // the fourth click completes a rectangle — make it active and snap it
+        if (this.draft().length === 4) {
+          const quad = this.draft();
+          this.draft.set([]);
+          this.quads.update((qs) => [...qs, quad]);
+          this.activeIdx.set(this.quads().length - 1);
+          this.correctBoundaries();
+        }
         this.redraw();
       }
       this.editPan = null;
@@ -969,7 +1047,9 @@ export class App {
   }
 
   protected clearCorners(): void {
-    this.corners.set([]);
+    this.quads.set([]);
+    this.draft.set([]);
+    this.activeIdx.set(-1);
     this.redraw();
   }
 
@@ -990,8 +1070,9 @@ export class App {
    * when hit, prepare a drag that translates the whole line along its normal.
    */
   private hitEdgeHandle(p: Point): EdgeDrag | null {
-    const pts = this.corners();
-    if (pts.length !== 4 || !this.image) return null;
+    const a0 = this.activeIdx();
+    if (a0 < 0 || !this.image) return null;
+    const pts = this.quads()[a0];
     const sorted = sortCorners(pts);
     const radius = HIT_RADIUS_CSS_PX / this.viewScale;
     for (let i = 0; i < 4; i++) {
@@ -1037,15 +1118,50 @@ export class App {
     return [tMin, tMax];
   }
 
-  private hitCorner(p: Point): number {
+  /** Nearest draggable corner: draft corners first, then the active rectangle's. */
+  private hitCorner(p: Point): { kind: 'quad' | 'draft'; idx: number } | null {
     const radius = HIT_RADIUS_CSS_PX / this.viewScale;
+    const nearest = (pts: Point[]): number => {
+      let best = -1;
+      let bestDist = radius;
+      pts.forEach((c, i) => {
+        const d = Math.hypot(c.x - p.x, c.y - p.y);
+        if (d <= bestDist) {
+          best = i;
+          bestDist = d;
+        }
+      });
+      return best;
+    };
+    const di = nearest(this.draft());
+    if (di >= 0) return { kind: 'draft', idx: di };
+    const a = this.activeIdx();
+    if (a >= 0) {
+      const qi = nearest(this.quads()[a]);
+      if (qi >= 0) return { kind: 'quad', idx: qi };
+    }
+    return null;
+  }
+
+  /** Smallest rectangle containing the point (so overlapped ones stay reachable). */
+  private quadAt(p: Point): number {
     let best = -1;
-    let bestDist = radius;
-    this.corners().forEach((c, i) => {
-      const d = Math.hypot(c.x - p.x, c.y - p.y);
-      if (d <= bestDist) {
+    let bestArea = Infinity;
+    this.quads().forEach((q, i) => {
+      const s = sortCorners(q);
+      let inside = true;
+      let area = 0;
+      for (let e = 0; e < 4; e++) {
+        const a = s[e];
+        const b = s[(e + 1) % 4];
+        // TL->TR->BR->BL winds clockwise in y-down coords: interior is cross >= 0
+        if ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) < 0) inside = false;
+        area += a.x * b.y - b.x * a.y;
+      }
+      area = Math.abs(area) / 2;
+      if (inside && area < bestArea) {
         best = i;
-        bestDist = d;
+        bestArea = area;
       }
     });
     return best;
@@ -1089,47 +1205,95 @@ export class App {
     ctx.clearRect(0, 0, img.width, img.height);
     ctx.drawImage(img, 0, 0);
 
-    const pts = this.corners();
-    if (!pts.length) return;
-    // once all 4 are placed, connect them in visual order so edges never cross
-    const order = pts.length === 4 ? sortCorners(pts) : pts;
+    const active = this.activeIdx();
+    const many = this.quads().length > 1; // a lone rectangle needs no number
+    this.quads().forEach((q, i) => this.drawQuad(ctx, q, i === active, many ? i + 1 : 0));
 
-    if (order.length > 1) {
+    // in-progress draft corners
+    const pts = this.draft();
+    if (!pts.length) return;
+    if (pts.length > 1) {
       ctx.beginPath();
-      ctx.moveTo(order[0].x, order[0].y);
-      for (let i = 1; i < order.length; i++) ctx.lineTo(order[i].x, order[i].y);
-      if (order.length === 4) {
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(34, 211, 238, 0.12)';
-        ctx.fill();
-      }
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.lineWidth = 2 / this.viewScale;
       ctx.strokeStyle = '#22d3ee';
       ctx.stroke();
     }
+    this.drawCornerDots(ctx, pts);
+  }
+
+  private drawQuad(ctx: CanvasRenderingContext2D, q: Point[], isActive: boolean, n: number): void {
+    // connect in visual order so edges never cross
+    const order = sortCorners(q);
+    ctx.beginPath();
+    ctx.moveTo(order[0].x, order[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(order[i].x, order[i].y);
+    ctx.closePath();
+    ctx.fillStyle = isActive ? 'rgba(34, 211, 238, 0.12)' : 'rgba(34, 211, 238, 0.04)';
+    ctx.fill();
+    if (!isActive) {
+      ctx.setLineDash([6 / this.viewScale, 4 / this.viewScale]);
+      ctx.lineWidth = 1.5 / this.viewScale;
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)';
+      ctx.stroke();
+      ctx.setLineDash([]);
+      this.drawQuadNumber(ctx, order, n, false);
+      return;
+    }
+    ctx.lineWidth = 2 / this.viewScale;
+    ctx.strokeStyle = '#22d3ee';
+    ctx.stroke();
 
     // edge sliders: diamond grips at each line's midpoint
-    if (order.length === 4) {
-      const hr = 8 / this.viewScale;
-      for (let i = 0; i < 4; i++) {
-        const a = order[i];
-        const b = order[(i + 1) % 4];
-        const mx = (a.x + b.x) / 2;
-        const my = (a.y + b.y) / 2;
-        ctx.beginPath();
-        ctx.moveTo(mx, my - hr);
-        ctx.lineTo(mx + hr, my);
-        ctx.lineTo(mx, my + hr);
-        ctx.lineTo(mx - hr, my);
-        ctx.closePath();
-        ctx.fillStyle = '#fbbf24';
-        ctx.fill();
-        ctx.lineWidth = 2.5 / this.viewScale;
-        ctx.strokeStyle = '#92400e';
-        ctx.stroke();
-      }
+    const hr = 8 / this.viewScale;
+    for (let i = 0; i < 4; i++) {
+      const a = order[i];
+      const b = order[(i + 1) % 4];
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      ctx.beginPath();
+      ctx.moveTo(mx, my - hr);
+      ctx.lineTo(mx + hr, my);
+      ctx.lineTo(mx, my + hr);
+      ctx.lineTo(mx - hr, my);
+      ctx.closePath();
+      ctx.fillStyle = '#fbbf24';
+      ctx.fill();
+      ctx.lineWidth = 2.5 / this.viewScale;
+      ctx.strokeStyle = '#92400e';
+      ctx.stroke();
     }
+    this.drawCornerDots(ctx, q);
+    this.drawQuadNumber(ctx, order, n, true);
+  }
 
+  /** Sequence number bubble in the middle of a rectangle (crop order); 0 = none. */
+  private drawQuadNumber(
+    ctx: CanvasRenderingContext2D,
+    order: Point[],
+    n: number,
+    isActive: boolean,
+  ): void {
+    if (!n) return;
+    const cx = (order[0].x + order[1].x + order[2].x + order[3].x) / 4;
+    const cy = (order[0].y + order[1].y + order[2].y + order[3].y) / 4;
+    const r = 16 / this.viewScale;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = isActive ? 'rgba(8, 145, 178, 0.92)' : 'rgba(15, 23, 42, 0.65)';
+    ctx.fill();
+    ctx.lineWidth = 2 / this.viewScale;
+    ctx.strokeStyle = isActive ? '#22d3ee' : 'rgba(34, 211, 238, 0.55)';
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `600 ${18 / this.viewScale}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(n), cx, cy);
+  }
+
+  private drawCornerDots(ctx: CanvasRenderingContext2D, pts: Point[]): void {
     const r = 8 / this.viewScale;
     for (const p of pts) {
       ctx.beginPath();
@@ -1146,18 +1310,13 @@ export class App {
 
   protected async apply(): Promise<void> {
     const img = this.image;
-    if (!img || this.corners().length !== 4 || this.mode() !== 'edit') return;
+    const quads = this.quads();
+    if (!img || !quads.length || this.mode() !== 'edit') return;
     this.mode.set('processing');
     this.progress.set(0);
     await new Promise((res) => setTimeout(res)); // let the overlay paint first
 
     try {
-      const [tl, tr, br, bl] = sortCorners(this.corners());
-      const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
-      // use the longest opposing edges so no side of the page is downsampled
-      const w = Math.max(1, Math.round(Math.max(dist(tl, tr), dist(bl, br))));
-      const h = Math.max(1, Math.round(Math.max(dist(tl, bl), dist(tr, br))));
-
       const srcCanvas = document.createElement('canvas');
       srcCanvas.width = img.width;
       srcCanvas.height = img.height;
@@ -1165,33 +1324,58 @@ export class App {
       sctx.drawImage(img, 0, 0);
       const srcData = sctx.getImageData(0, 0, img.width, img.height);
 
-      const hm = computeHomography(
-        [
-          { x: 0, y: 0 },
-          { x: w, y: 0 },
-          { x: w, y: h },
-          { x: 0, y: h },
-        ],
-        [tl, tr, br, bl],
-      );
-      const out = await warpPerspective(srcData, hm, w, h, (f) => this.progress.set(f));
+      // every rectangle becomes its own rectified photo
+      this.results = [];
+      for (let i = 0; i < quads.length; i++) {
+        const [tl, tr, br, bl] = sortCorners(quads[i]);
+        const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+        // use the longest opposing edges so no side of the photo is downsampled
+        const w = Math.max(1, Math.round(Math.max(dist(tl, tr), dist(bl, br))));
+        const h = Math.max(1, Math.round(Math.max(dist(tl, bl), dist(tr, br))));
+        const hm = computeHomography(
+          [
+            { x: 0, y: 0 },
+            { x: w, y: 0 },
+            { x: w, y: h },
+            { x: 0, y: h },
+          ],
+          [tl, tr, br, bl],
+        );
+        const out = await warpPerspective(srcData, hm, w, h, (f) =>
+          this.progress.set((i + f) / quads.length),
+        );
+        const c = document.createElement('canvas');
+        c.width = w;
+        c.height = h;
+        c.getContext('2d')!.putImageData(out, 0, 0);
+        this.results.push(c);
+      }
 
-      const rc = this.resultCanvas().nativeElement;
-      rc.width = w;
-      rc.height = h;
-      rc.getContext('2d')!.putImageData(out, 0, 0);
-      this.outSize.set({ w, h });
-      this.dateField.set(''); // date starts empty; the EXIF chip can fill it on demand
-      this.timeField.set(DEFAULT_TIME);
-      this.descriptionField.set('');
-      this.resetZoom();
+      this.resultCount.set(this.results.length);
+      this.resultIndex.set(0);
       this.mode.set('result');
-      requestAnimationFrame(() => this.layoutResultCanvas());
+      this.showResult(0);
     } catch (e) {
       console.error(e);
       alert(`Rectification failed: ${e instanceof Error ? e.message : e}`);
       this.mode.set('edit');
     }
+  }
+
+  /** Blit one rectified photo into the preview and reset its metadata fields. */
+  private showResult(i: number): void {
+    const src = this.results[i];
+    if (!src) return;
+    const rc = this.resultCanvas().nativeElement;
+    rc.width = src.width;
+    rc.height = src.height;
+    rc.getContext('2d')!.drawImage(src, 0, 0);
+    this.outSize.set({ w: src.width, h: src.height });
+    this.dateField.set(''); // date starts empty; the EXIF chip can fill it on demand
+    this.timeField.set(DEFAULT_TIME);
+    this.descriptionField.set('');
+    this.resetZoom();
+    requestAnimationFrame(() => this.layoutResultCanvas());
   }
 
   // --- result actions --------------------------------------------------------
@@ -1208,14 +1392,19 @@ export class App {
     this.descriptionField.set((ev.target as HTMLInputElement).value);
   }
 
-  /** Save the rectified PNG plus an XMP sidecar, then move to the next image. */
+  /**
+   * Save the current rectified PNG plus an XMP sidecar, then show the next
+   * rectangle's photo, or move to the next image after the last one.
+   */
   protected save(): void {
+    const idx = this.resultIndex();
+    const suffix = this.resultCount() > 1 ? `-${idx + 1}` : '';
     this.resultCanvas().nativeElement.toBlob((blob) => {
       if (!blob) {
         alert('Could not encode the image.');
         return;
       }
-      downloadBlob(blob, `${this.baseName}-rectified.png`);
+      downloadBlob(blob, `${this.baseName}-rectified${suffix}.png`);
       const userDate = this.dateField() || null;
       const description = this.descriptionField().trim() || null;
       // no metadata entered at all -> no sidecar
@@ -1233,11 +1422,16 @@ export class App {
         const xmp = buildXmpSidecar({ date, time, description });
         downloadBlob(
           new Blob([xmp], { type: 'application/rdf+xml' }),
-          `${this.baseName}-rectified.xmp`,
+          `${this.baseName}-rectified${suffix}.xmp`,
         );
       }
-      this.markCurrent('saved');
-      this.advance();
+      if (idx + 1 < this.resultCount()) {
+        this.resultIndex.set(idx + 1);
+        this.showResult(idx + 1);
+      } else {
+        this.markCurrent('saved');
+        this.advance();
+      }
     }, 'image/png');
   }
 
@@ -1251,7 +1445,11 @@ export class App {
     this.currentIndex.set(-1);
     // the scratchpad intentionally survives a batch reset (it is persisted);
     // it has its own clear buttons
-    this.corners.set([]);
+    this.quads.set([]);
+    this.draft.set([]);
+    this.activeIdx.set(-1);
+    this.results = [];
+    this.resultCount.set(0);
     this.outSize.set(null);
     this.photoDate.set(null);
     this.dateField.set('');
