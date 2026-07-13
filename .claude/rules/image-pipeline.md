@@ -32,11 +32,25 @@
 ## Multi-photo detection (detectPhotoRects)
 
 `detectPhotoRects` in `corner-detect.ts` finds all photos on a page. Per
-region: **luminance threshold** — pixels darker than 60% luminance are
-"photo", brighter are page background (`LUMA_THRESHOLD = 0.6 * 255`; the
-user validated this level with a Photoshop threshold adjustment layer on
-real album pages, and it replaced a fragile estimate-the-background-color
-approach — don't reintroduce background estimation without that evidence) →
+region: **luminance threshold** — Rec. 601 luminance
+(`0.299R + 0.587G + 0.114B`) on a ≤ 600 px downscale, 5-tap-Gaussian
+blurred, then hard-thresholded exactly like a Photoshop Threshold
+adjustment layer: darker = "photo", brighter = page background. The default
+level is 153 (`0.6 × 255`), which the user validated with an actual
+Photoshop threshold layer on real album pages; thresholding replaced a
+fragile estimate-the-background-color approach — don't reintroduce
+background estimation without that kind of evidence. The level is chosen
+**by the user, not by the code**: repeated `D` presses / Detect clicks
+re-run detection while cycling 0.6 → 0.7 → 0.8 → 0.9 (the cycle resets to
+0.6 after 2 s of no press or on a photo switch; first-visit auto-detection
+always uses 0.6). A higher level keeps light photo content (sky, white
+borders) from being trimmed off the crop. Automatic level selection was
+tried and **reverted**: neither "best score" (component area ×
+rectangularity²) nor "highest level with the highest rectangle count, all
+levels scanned" survived real pages — a photo nearly filling its album page
+is indistinguishable from a flooded threshold by geometry alone, so every
+heuristic mis-picked on some page. Don't reintroduce auto-selection without
+per-level ground truth over a corpus of real pages →
 dilate + fill enclosed holes smaller than one photo (photo content matching
 the page brightness must not fragment the photo, but the page enclosed by a
 dark table frame is also "a hole" and must NOT be filled) → erode (net
@@ -66,6 +80,16 @@ segmentation overshoots outward, so the true edge is always inside, and a
 soft print shadow can erase a photo's own edge line from the Hough peaks —
 without the constraint the fit latches onto the page edge behind the photo
 (a real bug, ~70 px overshoot).
+
+**The threshold decides WHICH rectangles exist; it does not place the final
+edges.** Edge placement is owned by two later, gradient/contrast-based
+stages: `houghRefit` (strongest straight contrast lines, guided by the
+threshold quad as above) and, on first visit, `snapCornersToEdges` +
+5 px inward shrink. So when detection "looks off" — rectangles sitting
+beside the true photo edge — the threshold stage is usually fine and the
+deviation comes from refit/snap latching onto a stronger contrast line
+nearby; debug those stages (and their guide/IoU constraints) before
+touching the threshold.
 
 Diagonal-extremes fitting assumes photos are roughly upright — perspective
 morph is fine, heavy rotation is not. `autoDetect` falls back to the
@@ -99,7 +123,7 @@ policy (keep it):
 - First visit of an image runs the intricate flow on every detected
   rectangle: auto-detect → snap corners → shrink 5 px inward (so the default
   crop carries no background sliver).
-- The `D` shortcut / "Detect corners" button runs the plain detection only.
+- The `D` shortcut / "Detect photos" button runs the plain detection only.
 - Snap also runs on a rectangle completed by the fourth manual corner click,
   and via the `C` shortcut / "Correct boundaries" button — but **never after
   a manual corner drag** (the loupe exists for deliberate placement; snapping

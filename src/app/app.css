@@ -8,7 +8,12 @@
   display: flex;
   background: #0f172a;
   color: #e2e8f0;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
 }
 
 .content {
@@ -106,10 +111,6 @@
   text-align: center;
 }
 
-.thumb .badge.is-info {
-  background: #0891b2;
-}
-
 /* number of photo rectangles that will be cropped from this image */
 .thumb .count-badge {
   position: absolute;
@@ -150,7 +151,9 @@
   border-radius: 1rem;
   text-align: center;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .dropzone:hover,
@@ -220,6 +223,16 @@ button:disabled {
   cursor: default;
 }
 
+/* toolbar toggle that is currently engaged (e.g. adding a photo) */
+button.active {
+  background: #0e7490;
+  border-color: #22d3ee;
+}
+
+button.active:hover:not(:disabled) {
+  background: #155e75;
+}
+
 button.primary {
   background: #0891b2;
   border-color: #0891b2;
@@ -284,17 +297,6 @@ button.mic {
 
 /* --- scratchpad chips --- */
 
-.scratch-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: #16213a;
-  border-bottom: 1px solid #334155;
-  flex-wrap: wrap;
-  font-size: 0.85rem;
-}
-
 .chip {
   background: #0f172a;
   border: 1px solid #475569;
@@ -307,15 +309,20 @@ button.mic {
   white-space: nowrap;
 }
 
-button.chip:hover {
-  border-color: #22d3ee;
-  background: rgba(34, 211, 238, 0.1);
-}
-
 .chip.static {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+/* on the result screen the chips fill the metadata fields */
+.chip.apply {
+  cursor: pointer;
+}
+
+.chip.apply:hover {
+  border-color: #22d3ee;
+  background: rgba(34, 211, 238, 0.1);
 }
 
 .chip .x {
@@ -348,8 +355,7 @@ button.chip:hover {
   touch-action: none;
 }
 
-.canvas-host,
-.info-image {
+.canvas-host {
   overscroll-behavior: none; /* keep pan gestures from triggering history navigation */
 }
 
@@ -360,37 +366,112 @@ canvas {
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
 }
 
-/* --- info screen --- */
+/* --- result strip: bottom bar with one thumb per rectified photo --- */
 
-.info-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  gap: 1rem;
-  padding: 1rem;
-}
-
-.info-image {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  overflow: auto; /* pan when zoomed in */
-}
-
-.info-image img {
-  margin: auto;
+.result-strip {
   flex-shrink: 0;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  overflow-x: auto;
 }
+
+.result-thumb {
+  position: relative;
+  padding: 0;
+  border: 2px solid #334155;
+  border-radius: 0.5rem;
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.result-thumb img {
+  display: block;
+  height: 64px;
+  width: auto;
+}
+
+.result-thumb.current {
+  border-color: #22d3ee;
+}
+
+/* crop-order number, same numbering as the bubbles in the corner editor */
+.result-thumb .num {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.25rem;
+  box-sizing: border-box;
+  border-radius: 0.7rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid #22d3ee;
+  color: #22d3ee;
+  font-size: 0.8rem;
+  line-height: 1.25rem;
+  text-align: center;
+}
+
+/* --- scratchpad panel: always-visible right column (collapsible to a rail) --- */
 
 .scratch-panel {
-  width: 340px;
+  width: 320px;
   flex-shrink: 0;
   overflow-y: auto;
   background: #1e293b;
-  border: 1px solid #334155;
-  border-radius: 0.75rem;
+  border-left: 1px solid #334155;
   padding: 1rem;
+}
+
+.scratch-panel.collapsed {
+  width: auto;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* shared by the collapsed rail (vertical) and the expanded header's collapse
+   trigger (horizontal) — same chrome-less layout, only the axis differs */
+.scratch-rail {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.55rem;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: #94a3b8;
+}
+
+.scratch-panel.collapsed .scratch-rail {
+  height: 100%;
+  flex-direction: column;
+  padding: 0.75rem 0.5rem;
+}
+
+.scratch-rail:hover:not(:disabled) {
+  background: #263449;
+  color: #e2e8f0;
+}
+
+.rail-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.scratch-panel.collapsed .rail-label {
+  writing-mode: vertical-rl;
+}
+
+.rail-count {
+  background: #334155;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
 }
 
 .scratch-head {
@@ -400,9 +481,9 @@ canvas {
   margin-bottom: 0.75rem;
 }
 
-.scratch-panel h2 {
-  margin: 0;
-  font-size: 1.05rem;
+/* cancel the rail's own padding so the label lines up with the panel content */
+.scratch-head .scratch-rail {
+  margin-left: -0.55rem;
 }
 
 button.clear-scratch {
@@ -413,10 +494,6 @@ button.clear-scratch {
 
 button.clear-scratch:hover:not(:disabled) {
   color: #f87171;
-}
-
-.scratch-row .clear-scratch {
-  margin-left: auto;
 }
 
 .scratch-panel h3 {

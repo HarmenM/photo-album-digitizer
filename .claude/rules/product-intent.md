@@ -28,14 +28,17 @@ photobook shot with a camera or phone).
 
 - For photos you don't want to save (yet) but that contain useful data:
   captions, descriptions, dates.
-- Collect that data into the shared scratchpad, then move on to the next photo.
+- Collect that data into the shared scratchpad — an **always-visible side
+  panel** (no separate page or mode) — then move on to the next photo.
 - The scratchpad feeds Path 1's quick-fill on later photos.
 
 ## What this means when working on the project
 
 - The two paths (preview+save vs. collect-info) are the backbone of the UX;
   keep both first-class and keep switching between photos fast.
-- The scratchpad is the bridge between the paths — data collected on info
-  pages must remain effortlessly reusable when saving other photos.
+- The scratchpad is the bridge between the paths — data collected from info
+  pages must remain effortlessly reusable when saving other photos. Keeping
+  the panel permanently on screen is deliberate: collecting must never
+  require leaving the current photo.
 - Optimize for batch throughput: a user works through a whole queue of photos
   in one sitting, so minimize clicks and keystrokes per photo.

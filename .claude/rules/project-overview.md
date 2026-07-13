@@ -4,16 +4,17 @@ Photo Rectifier is a single-page Angular 22 app that batch-rectifies photographe
 photobook pages: pick/drag in a queue of photos, mark the corners of every photo
 on the page (multi-photo auto-detection, then adjustable rectangles), warp each
 to a flat rectangle, add date/description metadata per photo, and save a PNG
-plus an XMP sidecar for each. Some pages are "info" pages: not saved, but their
-dates/descriptions go into a shared scratchpad reused as clickable chips on
-later photos.
+plus an XMP sidecar for each. A shared scratchpad lives in an always-visible
+right side panel: dates/descriptions collected from context pages ("info"
+pages, not saved themselves) are reused as clickable chips when saving later
+photos.
 
 ## Layout
 
 Everything lives in `src/app/`:
 
 - `app.ts` / `app.html` / `app.css` — the single `App` component: queue, corner
-  editor canvas, precision loupe, result/info views, scratchpad, keyboard
+  editor canvas, precision loupe, result view, scratchpad panel, keyboard
   shortcuts, voice dictation. All UI state is here as signals.
 - `corner-detect.ts` — automatic photo detection: multi-photo segmentation
   (`detectPhotoRects`, luminance threshold + morphology + Hough refit),

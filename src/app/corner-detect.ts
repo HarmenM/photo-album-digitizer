@@ -228,16 +228,24 @@ function quadIoU(a: Point[], b: Point[]): number {
 
 const MIN_PHOTO_FRACTION = 0.1; // a photo must cover at least 10% of the image
 const MAX_OVERLAP = 0.5; // drop a quad when more of it lies inside an accepted one
-// Photoshop-style threshold level: pixels darker than 60% luminance count as
-// "photo", brighter as page background. Validated on real album pages with a
-// threshold adjustment layer in an image editor before being coded here.
-const LUMA_THRESHOLD = 0.6 * 255;
+// Photoshop-style threshold level: pixels darker than the level count as
+// "photo", brighter as page background. 0.6 is the default, validated on
+// real album pages with an actual Photoshop threshold layer; the caller can
+// pass a higher level (the D shortcut cycles 0.6→0.9) for pages whose light
+// photo content gets trimmed at 0.6. Auto-picking the level was tried and
+// reverted — no scoring rule survived contact with real pages.
+const DEFAULT_LUMA_LEVEL = 0.6;
 const DILATE_PASSES = 2; // closes cracks and small holes before hole-filling
 const ERODE_PASSES = 5; // net shrink after dilation separates touching photos
 const NET_SHRINK = ERODE_PASSES - DILATE_PASSES; // per-side shrink to grow back
 const MAX_SPLIT_ERODES = 4; // extra per-component erosions to break bridged blobs
 const MAX_ASPECT = 3.5; // longest/shortest quad side; photos are never strips
 const PAGE_FRACTION = 0.55; // a lone quad this big is the album page, not a photo
+// A photographed rectangle's corners stay close to 90°: the mild perspective
+// of a handheld page shot bends them only a few degrees. 12° accepts that
+// (plus diagonal-extremes fit slop) while rejecting sheared blobs — shadows,
+// sleeves, half-merged neighbours — that are clearly not photos.
+const MAX_CORNER_DEV_DEG = 12;
 
 /**
  * Detect all photographs lying on a page (e.g. an album sheet photographed
@@ -245,10 +253,11 @@ const PAGE_FRACTION = 0.55; // a lone quad this big is the album page, not a pho
  * roughly in reading order; empty when nothing plausible is found.
  *
  * Pipeline per region: threshold on luminance (photos are darker than the
- * page, like a Photoshop threshold layer at 60%) -> close cracks and fill
+ * page, like a Photoshop threshold layer at `level`) -> close cracks and fill
  * photo-internal holes -> erode (splits touching photos) -> connected
  * components -> fit a quad to each component via its diagonal extremes ->
- * keep only rectangul-ish quads covering >= 10% of the image -> greedily
+ * keep only rectangul-ish quads covering >= 10% of the image whose corners
+ * are 90°-ish (a photographed rectangle bends only a few degrees) -> greedily
  * drop quads that mostly overlap a bigger accepted one (this also covers
  * "no photographs inside photographs").
  *
@@ -267,7 +276,7 @@ const PAGE_FRACTION = 0.55; // a lone quad this big is the album page, not a pho
  * (perspective-morphed is fine, heavily rotated is not) — rotate the page
  * first for those.
  */
-export function detectPhotoRects(img: ImageBitmap): Point[][] {
+export function detectPhotoRects(img: ImageBitmap, level = DEFAULT_LUMA_LEVEL): Point[][] {
   const MAX_DIM = 600;
   const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
   const w = Math.max(8, Math.round(img.width * scale));
@@ -281,7 +290,8 @@ export function detectPhotoRects(img: ImageBitmap): Point[][] {
   const rgba = ctx.getImageData(0, 0, w, h).data;
 
   const minQuadArea = MIN_PHOTO_FRACTION * w * h;
-  let quads = detectInRegion(rgba, w, 0, 0, w, h, minQuadArea);
+  const threshold = level * 255;
+  let quads = detectInRegion(rgba, w, 0, 0, w, h, minQuadArea, threshold);
 
   // A single dominant quad is the album page itself, not a photo — run the
   // detection again inside it, so the page interior becomes the background.
@@ -294,10 +304,12 @@ export function detectPhotoRects(img: ImageBitmap): Point[][] {
     const x1 = Math.min(w, Math.round(Math.max(...xs)) - inset);
     const y1 = Math.min(h, Math.round(Math.max(...ys)) - inset);
     if (x1 - x0 > 20 && y1 - y0 > 20) {
-      const inner = detectInRegion(rgba, w, x0, y0, x1, y1, minQuadArea);
+      const inner = detectInRegion(rgba, w, x0, y0, x1, y1, minQuadArea, threshold);
       if (inner.length) quads = inner;
     }
   }
+
+  console.debug(`detectPhotoRects @${level.toFixed(2)}: ${quads.length} quad(s)`);
 
   // segmentation discovered the photos; the Hough line fit nails their edges
   const sx = img.width / w;
@@ -360,6 +372,7 @@ function detectInRegion(
   rx1: number,
   ry1: number,
   minQuadArea: number,
+  threshold: number,
 ): Point[][] {
   const w = rx1 - rx0;
   const h = ry1 - ry0;
@@ -378,7 +391,7 @@ function detectInRegion(
   }
   const blurred = gaussianBlur5(luma, w, h);
   let mask = new Uint8Array(w * h);
-  for (let i = 0; i < mask.length; i++) mask[i] = blurred[i] < LUMA_THRESHOLD ? 1 : 0;
+  for (let i = 0; i < mask.length; i++) mask[i] = blurred[i] < threshold ? 1 : 0;
   // close cracks, then solidify photos whose bright content matches the page
   // color (holes), then shrink so touching photos come apart. Only holes
   // smaller than a photo are filled — the page enclosed by a table frame is
@@ -405,7 +418,10 @@ function detectInRegion(
     ];
     const fitArea = polyArea(quad0);
     const ratio = fitArea >= 1 ? comp.area / fitArea : 0;
-    if (ratio >= 0.72 && ratio <= 1.2) {
+    // angle check on quad0: expansion below offsets edges in parallel, so the
+    // corner angles don't change. A sheared quad falls through to the split
+    // retry — it is often two photos bridged by a diagonal shadow.
+    if (ratio >= 0.72 && ratio <= 1.2 && maxCornerAngleDev(quad0) <= MAX_CORNER_DEV_DEG) {
       // grow back what the morphology and blur ate off the edges
       const expanded = insetQuad(quad0, -(NET_SHRINK + 1 + extra)) ?? quad0;
       const quadArea = polyArea(expanded);
@@ -524,6 +540,22 @@ function componentsOf(mask: Uint8Array, w: number, h: number, minArea: number): 
     if (pixels.length >= minArea) out.push({ area: pixels.length, pixels, tl, tr, br, bl });
   }
   return out;
+}
+
+/** Largest deviation of the quad's four interior angles from 90°, in degrees. */
+function maxCornerAngleDev(quad: [Point, Point, Point, Point]): number {
+  let worst = 0;
+  for (let i = 0; i < 4; i++) {
+    const cur = quad[i];
+    const prev = quad[(i + 3) % 4];
+    const next = quad[(i + 1) % 4];
+    const a =
+      Math.atan2(prev.y - cur.y, prev.x - cur.x) - Math.atan2(next.y - cur.y, next.x - cur.x);
+    let deg = Math.abs((a * 180) / Math.PI);
+    if (deg > 180) deg = 360 - deg;
+    worst = Math.max(worst, Math.abs(deg - 90));
+  }
+  return worst;
 }
 
 /** Longest quad side divided by the shortest opposing pair. */

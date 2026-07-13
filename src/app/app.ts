@@ -1,11 +1,19 @@
-import { Component, ElementRef, HostListener, computed, effect, signal, viewChild } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  HostListener,
+  computed,
+  effect,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { detectPageCorners, detectPhotoRects, snapCornersToEdges } from './corner-detect';
 import { parseSpokenDate, readExifDate } from './exif';
 import { Point, computeHomography, insetQuad, sortCorners, warpPerspective } from './homography';
 import { buildXmpSidecar } from './xmp';
 
-type Mode = 'idle' | 'edit' | 'processing' | 'result' | 'info' | 'done';
-type ImageStatus = 'pending' | 'saved' | 'info';
+type Mode = 'idle' | 'edit' | 'processing' | 'result' | 'done';
+type ImageStatus = 'pending' | 'saved';
 
 interface QueueItem {
   id: number;
@@ -50,6 +58,11 @@ interface Recognition {
 const HIT_RADIUS_CSS_PX = 16;
 const SCRATCH_STORAGE_KEY = 'photo-rectifier.scratchpad';
 const DEFAULT_TIME = '12:00:00';
+// Repeated D presses / Detect clicks re-run detection at climbing threshold
+// levels for pages whose light photo content gets trimmed at the default;
+// the cycle resets to the first level after a pause or on a photo switch.
+const DETECT_LEVELS = [0.6, 0.7, 0.8, 0.9];
+const DETECT_LEVEL_RESET_MS = 2000;
 
 @Component({
   selector: 'app-root',
@@ -62,6 +75,9 @@ export class App {
   // photo rectangles on the current image; one is active and editable
   protected readonly quads = signal<Point[][]>([]);
   protected readonly draft = signal<Point[]>([]); // manually clicked corners, < 4
+  // "add photo" mode: entered via the toolbar button, canceled by pressing
+  // it again or Esc; plain canvas clicks place corners only while this is on
+  protected readonly drafting = signal(false);
   protected readonly activeIdx = signal(-1);
   protected readonly progress = signal(0);
   protected readonly outSize = signal<{ w: number; h: number } | null>(null);
@@ -69,15 +85,14 @@ export class App {
   private results: HTMLCanvasElement[] = [];
   protected readonly resultIndex = signal(0);
   protected readonly resultCount = signal(0);
+  // small dataURLs for the bottom strip on the result screen (2+ photos only)
+  protected readonly resultThumbs = signal<string[]>([]);
 
   // image queue
   protected readonly images = signal<QueueItem[]>([]);
   protected readonly currentIndex = signal(-1);
   protected readonly savedCount = computed(
     () => this.images().filter((i) => i.status === 'saved').length,
-  );
-  protected readonly infoCount = computed(
-    () => this.images().filter((i) => i.status === 'info').length,
   );
 
   // metadata for the current result
@@ -105,18 +120,20 @@ export class App {
   protected readonly scratchDescriptions = computed(() =>
     this.scratchpad().filter((e) => e.kind === 'description'),
   );
+  // collapsed = slim rail only; the panel stays on screen so expanding is one click
+  protected readonly scratchCollapsed = signal(false);
 
   protected readonly listening = signal(false);
   protected readonly voiceStatus = signal<string | null>(null);
-  protected readonly infoUrl = signal<string | null>(null);
   protected readonly zoom = signal(1);
   protected readonly loupeVisible = signal(false);
 
   protected readonly hint = computed(() => {
-    const d = this.draft().length;
-    if (d > 0) return `Click the corners of a photo — ${4 - d} to go`;
+    if (this.drafting()) {
+      return `Click the corners of a photo — ${4 - this.draft().length} to go (Esc cancels)`;
+    }
     const n = this.quads().length;
-    if (n === 0) return 'Click the corners of a photo — 4 to go';
+    if (n === 0) return 'No photos marked — detect (D) or add a photo';
     return `${n} photo${n > 1 ? 's' : ''} selected`;
   });
 
@@ -124,12 +141,12 @@ export class App {
   private readonly canvasHost = viewChild.required<ElementRef<HTMLDivElement>>('canvasHost');
   private readonly resultCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('resultCanvas');
   private readonly resultHost = viewChild.required<ElementRef<HTMLDivElement>>('resultHost');
-  private readonly infoImg = viewChild.required<ElementRef<HTMLImageElement>>('infoImg');
-  private readonly scratchInput = viewChild.required<ElementRef<HTMLInputElement>>('scratchText');
   private readonly loupeCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('loupeCanvas');
 
   private image: ImageBitmap | null = null;
   private baseName = 'photo';
+  private detectLevelIdx = 0; // position in the DETECT_LEVELS cycle
+  private detectLevelTimer: ReturnType<typeof setTimeout> | null = null;
   private viewScale = 1;
   private renderScale = 1; // image px -> canvas backing-store px
   private dragIndex = -1;
@@ -221,9 +238,7 @@ export class App {
     if (this.mode() === 'idle' || this.mode() === 'done') void this.openImage(firstNew);
     for (const item of newItems) {
       const thumb = await this.makeThumb(item.file).catch(() => '');
-      this.images.update((list) =>
-        list.map((it) => (it.id === item.id ? { ...it, thumb } : it)),
-      );
+      this.images.update((list) => list.map((it) => (it.id === item.id ? { ...it, thumb } : it)));
     }
   }
 
@@ -281,8 +296,11 @@ export class App {
     // empty state (and thumb count) for the new item while it decodes
     this.quads.set([]);
     this.draft.set([]);
+    this.drafting.set(false);
     this.activeIdx.set(-1);
-    this.revokeInfoUrl();
+    // new photo: the D-shortcut threshold cycle starts over
+    if (this.detectLevelTimer) clearTimeout(this.detectLevelTimer);
+    this.detectLevelIdx = 0;
     let bmp: ImageBitmap;
     try {
       bmp = await createImageBitmap(item.file, { imageOrientation: 'from-image' });
@@ -309,6 +327,7 @@ export class App {
     this.activeIdx.set(stored?.length ? 0 : -1);
     this.results = [];
     this.resultCount.set(0);
+    this.resultThumbs.set([]);
     this.outSize.set(null);
     this.photoDate.set(null);
     this.setVoiceStatus(null);
@@ -336,7 +355,6 @@ export class App {
       this.image?.close();
       this.image = null;
       this.currentIndex.set(-1);
-      this.revokeInfoUrl();
       this.mode.set('idle');
     } else if (index < cur) {
       this.currentIndex.set(cur - 1);
@@ -358,7 +376,6 @@ export class App {
       this.image?.close();
       this.image = null;
       this.currentIndex.set(-1);
-      this.revokeInfoUrl();
       this.mode.set('done');
     }
   }
@@ -374,18 +391,27 @@ export class App {
    * (manual = false) every detected rectangle is refined further: snap the
    * corners to the full-res contrast boundary, then step 5 px inward so the
    * default crop carries no background sliver. The D shortcut / toolbar
-   * button runs the plain detection only.
+   * button runs the plain detection only, and repeated presses climb the
+   * DETECT_LEVELS threshold cycle (reset by a 2 s pause or a photo switch).
    */
   protected autoDetect(manual = true): void {
     const img = this.image;
     if (!img || this.mode() !== 'edit') return;
-    let found = detectPhotoRects(img);
+    let level = DETECT_LEVELS[0];
+    if (manual) {
+      level = DETECT_LEVELS[this.detectLevelIdx];
+      this.detectLevelIdx = (this.detectLevelIdx + 1) % DETECT_LEVELS.length;
+      if (this.detectLevelTimer) clearTimeout(this.detectLevelTimer);
+      this.detectLevelTimer = setTimeout(() => (this.detectLevelIdx = 0), DETECT_LEVEL_RESET_MS);
+    }
+    let found = detectPhotoRects(img, level);
     if (!found.length) {
       const page = detectPageCorners(img);
       if (page) found = [page];
     }
     if (found.length) {
       this.draft.set([]);
+      this.drafting.set(false);
       if (!manual) {
         found = found.map((q) => {
           const snapped = snapCornersToEdges(img, q).map((p) => this.clampToImage(p));
@@ -427,7 +453,6 @@ export class App {
   private relayoutPreview(): void {
     if (this.mode() === 'edit') this.layoutEditCanvas();
     else if (this.mode() === 'result') this.layoutResultCanvas();
-    else if (this.mode() === 'info') this.layoutInfoImage();
   }
 
   protected layoutResultCanvas(): void {
@@ -438,20 +463,6 @@ export class App {
     const z = fit * this.zoom();
     rc.style.width = `${rc.width * z}px`;
     rc.style.height = `${rc.height * z}px`;
-  }
-
-  protected layoutInfoImage(): void {
-    const img = this.infoImg().nativeElement;
-    const host = img.parentElement!;
-    if (!img.naturalWidth || !host.clientWidth || !host.clientHeight) return;
-    const fit = Math.min(
-      host.clientWidth / img.naturalWidth,
-      host.clientHeight / img.naturalHeight,
-      1,
-    );
-    const z = fit * this.zoom();
-    img.style.width = `${img.naturalWidth * z}px`;
-    img.style.height = `${img.naturalHeight * z}px`;
   }
 
   /**
@@ -486,12 +497,11 @@ export class App {
     }
   }
 
-  /** Delete the in-progress draft corners, or else the active rectangle. */
+  /** Delete the in-progress draft, or else the active rectangle. */
   protected deleteActive(): void {
     if (this.mode() !== 'edit') return;
-    if (this.draft().length) {
-      this.draft.set([]);
-      this.redraw();
+    if (this.drafting()) {
+      this.cancelDraft();
       return;
     }
     const a = this.activeIdx();
@@ -499,6 +509,21 @@ export class App {
     this.quads.update((qs) => qs.filter((_, i) => i !== a));
     this.activeIdx.set(this.quads().length ? Math.min(a, this.quads().length - 1) : -1);
     this.redraw();
+  }
+
+  /** Toggle "add photo" mode; pressing the button while drafting cancels. */
+  protected toggleDraft(): void {
+    if (this.mode() !== 'edit') return;
+    if (this.drafting()) this.cancelDraft();
+    else this.drafting.set(true);
+  }
+
+  private cancelDraft(): void {
+    this.drafting.set(false);
+    if (this.draft().length) {
+      this.draft.set([]);
+      this.redraw();
+    }
   }
 
   // --- speech input -----------------------------------------------------------
@@ -584,7 +609,11 @@ export class App {
   }
 
   /** Add typed text to the scratchpad; dates are parsed like spoken ones. */
-  protected addScratchText(kind: 'date' | 'description', raw: string, input: HTMLInputElement): void {
+  protected addScratchText(
+    kind: 'date' | 'description',
+    raw: string,
+    input: HTMLInputElement,
+  ): void {
     const text = raw.trim();
     if (!text) return;
     if (kind === 'date') {
@@ -609,12 +638,19 @@ export class App {
     this.scratchpad.set([]);
   }
 
+  protected toggleScratchpad(): void {
+    this.scratchCollapsed.update((c) => !c);
+  }
+
   /**
    * Use a scratchpad entry as the current date or description. Every use of a
    * date advances its time by one second (12:00:00, 12:00:01, …) so photos
-   * sharing a date keep a stable chronological order.
+   * sharing a date keep a stable chronological order. Only meaningful on the
+   * result screen — the panel is always visible, but the metadata fields are
+   * not, so a chip click elsewhere does nothing.
    */
   protected applyScratch(entry: ScratchEntry): void {
+    if (this.mode() !== 'result') return;
     if (entry.kind === 'date' && entry.dateIso) {
       const used = entry.used ?? 0;
       this.dateField.set(entry.dateIso);
@@ -627,53 +663,13 @@ export class App {
     }
   }
 
-  // --- info mode ("use info" pages) --------------------------------------------
-
-  protected useInfo(): void {
-    const item = this.images()[this.currentIndex()];
-    const img = this.image;
-    if (!item || !img || this.mode() !== 'edit') return;
-    this.revokeInfoUrl();
-    // render the current working image (including any rotation applied in the
-    // editor) instead of the original file, so both pages match
-    const c = document.createElement('canvas');
-    c.width = img.width;
-    c.height = img.height;
-    c.getContext('2d')!.drawImage(img, 0, 0);
-    c.toBlob(
-      (blob) => {
-        if (blob) this.infoUrl.set(URL.createObjectURL(blob));
-      },
-      'image/jpeg',
-      0.92,
-    );
-    this.resetZoom();
-    this.mode.set('info');
-    // focus the scratchpad input so typing can start right away
-    requestAnimationFrame(() => {
-      this.scratchInput().nativeElement.focus();
-      this.layoutInfoImage();
-    });
-  }
-
-  protected infoDone(): void {
-    this.markCurrent('info');
-    this.advance();
-  }
-
   protected backToEdit(): void {
-    this.revokeInfoUrl();
     this.results = []; // discard pending rectified photos
     this.resultCount.set(0);
+    this.resultThumbs.set([]);
     this.resetZoom();
     this.mode.set('edit');
     requestAnimationFrame(() => this.layoutEditCanvas());
-  }
-
-  private revokeInfoUrl(): void {
-    const url = this.infoUrl();
-    if (url) URL.revokeObjectURL(url);
-    this.infoUrl.set(null);
   }
 
   // --- rotation --------------------------------------------------------------
@@ -683,18 +679,17 @@ export class App {
 
   @HostListener('window:keydown', ['$event'])
   protected onKeyDown(ev: KeyboardEvent): void {
-    // Alt/Cmd+Enter confirms the current phase: apply, save, or done-with-info.
+    // Alt/Cmd+Enter confirms the current phase: apply or save.
     // Checked before the input guard so it also works while typing metadata.
     if (ev.key === 'Enter' && (ev.altKey || ev.metaKey)) {
       ev.preventDefault();
       if (this.mode() === 'edit') void this.apply();
       else if (this.mode() === 'result') this.save();
-      else if (this.mode() === 'info') this.infoDone();
       return;
     }
 
     // Ctrl/Cmd +/-/0 zoom the active preview instead of the whole page
-    if ((ev.metaKey || ev.ctrlKey) && ['edit', 'result', 'info'].includes(this.mode())) {
+    if ((ev.metaKey || ev.ctrlKey) && ['edit', 'result'].includes(this.mode())) {
       if (ev.key === '+' || ev.key === '=') {
         ev.preventDefault();
         this.applyZoom(this.zoom() * 1.25);
@@ -713,15 +708,24 @@ export class App {
     }
 
     const target = ev.target as HTMLElement | null;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+    if (
+      target &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    ) {
       // Escape steps out of the field; a second Escape then leaves the screen
       if (ev.key === 'Escape') target.blur();
       return;
     }
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
 
-    // Escape returns from a phase-2 screen (result / info) to the corner editor
-    if (ev.key === 'Escape' && (this.mode() === 'result' || this.mode() === 'info')) {
+    // Escape cancels an in-progress rectangle in the editor
+    if (ev.key === 'Escape' && this.mode() === 'edit' && this.drafting()) {
+      this.cancelDraft();
+      return;
+    }
+
+    // Escape returns from the result screen to the corner editor
+    if (ev.key === 'Escape' && this.mode() === 'result') {
       this.backToEdit();
       return;
     }
@@ -739,13 +743,26 @@ export class App {
       }
     }
 
+    // on the result screen the arrows step through the rectified photos
+    if (this.mode() === 'result') {
+      if (ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        this.goToResult(this.resultIndex() - 1);
+        return;
+      }
+      if (ev.key === 'ArrowRight') {
+        ev.preventDefault();
+        this.goToResult(this.resultIndex() + 1);
+        return;
+      }
+    }
+
     const key = ev.key.toLowerCase();
     if (key === 'r') void this.rotate(1);
     else if (key === 'l') void this.rotate(-1);
     else if (key === 'd' && this.mode() === 'edit') this.autoDetect();
     else if (key === 's' && this.mode() === 'edit') this.shrinkQuad();
     else if (key === 'c' && this.mode() === 'edit') this.correctBoundaries();
-    else if (key === 'i' && this.mode() === 'edit') this.useInfo();
     else if ((ev.key === 'Delete' || ev.key === 'Backspace') && this.mode() === 'edit') {
       this.deleteActive();
     }
@@ -800,25 +817,31 @@ export class App {
   }
 
   private rotateResult(dir: 1 | -1): void {
-    const rc = this.resultCanvas().nativeElement;
-    const oldW = rc.width;
-    const oldH = rc.height;
+    // rotate the stored result, not just the visible canvas, so the rotation
+    // survives navigating to another photo and back, and the strip thumbnail
+    // stays in sync
+    const idx = this.resultIndex();
+    const src = this.results[idx];
+    if (!src) return;
     const tmp = document.createElement('canvas');
-    tmp.width = oldH;
-    tmp.height = oldW;
+    tmp.width = src.height;
+    tmp.height = src.width;
     const tctx = tmp.getContext('2d')!;
     if (dir === 1) {
-      tctx.translate(oldH, 0);
+      tctx.translate(src.height, 0);
       tctx.rotate(Math.PI / 2);
     } else {
-      tctx.translate(0, oldW);
+      tctx.translate(0, src.width);
       tctx.rotate(-Math.PI / 2);
     }
-    tctx.drawImage(rc, 0, 0);
-    rc.width = oldH;
-    rc.height = oldW;
+    tctx.drawImage(src, 0, 0);
+    this.results[idx] = tmp;
+    this.resultThumbs.update((t) => t.map((v, i) => (i === idx ? resultThumb(tmp) : v)));
+    const rc = this.resultCanvas().nativeElement;
+    rc.width = tmp.width;
+    rc.height = tmp.height;
     rc.getContext('2d')!.drawImage(tmp, 0, 0);
-    this.outSize.set({ w: oldH, h: oldW });
+    this.outSize.set({ w: tmp.width, h: tmp.height });
     this.layoutResultCanvas();
   }
 
@@ -837,21 +860,25 @@ export class App {
       this.updateLoupe(ev, pts[hit.idx]);
       return;
     }
-    const edge = this.hitEdgeHandle(p);
-    if (edge) {
-      this.edgeDrag = edge;
-      this.editCanvas().nativeElement.setPointerCapture(ev.pointerId);
-      return;
+    // while drafting, only draft corners are interactive: edge grips and
+    // rectangle activation must not swallow the clicks that place corners
+    if (!this.drafting()) {
+      const edge = this.hitEdgeHandle(p);
+      if (edge) {
+        this.edgeDrag = edge;
+        this.editCanvas().nativeElement.setPointerCapture(ev.pointerId);
+        return;
+      }
+      // clicking inside another rectangle activates it
+      const qi = this.quadAt(p);
+      if (qi >= 0 && qi !== this.activeIdx()) {
+        this.activeIdx.set(qi);
+        this.redraw();
+        return;
+      }
     }
-    // clicking inside another rectangle activates it
-    const qi = this.quadAt(p);
-    if (qi >= 0 && qi !== this.activeIdx()) {
-      this.activeIdx.set(qi);
-      this.redraw();
-      return;
-    }
-    // empty area: drag pans the view, a plain click (below the movement
-    // threshold) still places a draft corner on release
+    // empty area: drag pans the view; while drafting, a plain click (below
+    // the movement threshold) still places a draft corner on release
     const host = this.canvasHost().nativeElement;
     this.editPan = {
       clientX: ev.clientX,
@@ -894,8 +921,7 @@ export class App {
       const d = this.edgeDrag;
       const p = this.toImagePoint(ev);
       // project the pointer movement onto the edge normal (the slider axis)
-      let t =
-        (p.x - d.startPointer.x) * d.normal.x + (p.y - d.startPointer.y) * d.normal.y;
+      let t = (p.x - d.startPointer.x) * d.normal.x + (p.y - d.startPointer.y) * d.normal.y;
       t = Math.min(Math.max(t, d.tMin), d.tMax);
       const movedA = { x: d.startA.x + t * d.normal.x, y: d.startA.y + t * d.normal.y };
       const movedB = { x: d.startB.x + t * d.normal.x, y: d.startB.y + t * d.normal.y };
@@ -909,26 +935,32 @@ export class App {
     } else {
       const canvas = this.editCanvas().nativeElement;
       const p = this.toImagePoint(ev);
+      if (this.drafting()) {
+        canvas.style.cursor = this.hitCorner(p) ? 'move' : 'crosshair';
+        return;
+      }
       const qi = this.quadAt(p);
+      const edge = this.hitEdgeHandle(p);
       canvas.style.cursor = this.hitCorner(p)
-        ? 'grab'
-        : this.hitEdgeHandle(p)
-          ? 'move'
+        ? 'move'
+        : edge
+          ? this.edgeResizeCursor(edge.normal)
           : qi >= 0 && qi !== this.activeIdx()
             ? 'pointer'
-            : 'crosshair';
+            : 'grab';
     }
   }
 
   protected onPointerUp(ev: PointerEvent): void {
     if (this.editPan) {
-      if (!this.editPan.moved) {
+      if (!this.editPan.moved && this.drafting()) {
         const p = this.clampToImage(this.editPan.imgPoint);
         this.draft.update((c) => [...c, p]);
         // the fourth click completes a rectangle — make it active and snap it
         if (this.draft().length === 4) {
           const quad = this.draft();
           this.draft.set([]);
+          this.drafting.set(false);
           this.quads.update((qs) => [...qs, quad]);
           this.activeIdx.set(this.quads().length - 1);
           this.correctBoundaries();
@@ -1049,6 +1081,7 @@ export class App {
   protected clearCorners(): void {
     this.quads.set([]);
     this.draft.set([]);
+    this.drafting.set(false);
     this.activeIdx.set(-1);
     this.redraw();
   }
@@ -1098,6 +1131,20 @@ export class App {
     return null;
   }
 
+  /**
+   * Resize cursor matching the axis an edge grip slides along (its normal),
+   * bucketed to 45° so perspective-skewed edges still get a sensible arrow.
+   * Corners live in rotated-image pixels and viewScale is uniform, so an
+   * image-space direction is also the on-screen direction.
+   */
+  private edgeResizeCursor(n: Point): string {
+    const deg = ((Math.atan2(n.y, n.x) * 180) / Math.PI + 180) % 180;
+    if (deg < 22.5 || deg >= 157.5) return 'ew-resize';
+    if (deg < 67.5) return 'nwse-resize';
+    if (deg < 112.5) return 'ns-resize';
+    return 'nesw-resize';
+  }
+
   /** How far the edge may slide along its normal before a corner leaves the image. */
   private edgeTranslationRange(a: Point, b: Point, n: Point): [number, number] {
     const img = this.image!;
@@ -1135,6 +1182,8 @@ export class App {
     };
     const di = nearest(this.draft());
     if (di >= 0) return { kind: 'draft', idx: di };
+    // while drafting, only the draft's own corners are draggable
+    if (this.drafting()) return null;
     const a = this.activeIdx();
     if (a >= 0) {
       const qi = nearest(this.quads()[a]);
@@ -1184,11 +1233,7 @@ export class App {
     canvas.style.height = `${cssH}px`;
     // backing store: sharp up to the source resolution, capped for memory
     const dpr = window.devicePixelRatio || 1;
-    this.renderScale = Math.min(
-      this.viewScale * dpr,
-      1,
-      8192 / Math.max(img.width, img.height),
-    );
+    this.renderScale = Math.min(this.viewScale * dpr, 1, 8192 / Math.max(img.width, img.height));
     canvas.width = Math.max(1, Math.round(img.width * this.renderScale));
     canvas.height = Math.max(1, Math.round(img.height * this.renderScale));
     this.redraw();
@@ -1352,6 +1397,7 @@ export class App {
       }
 
       this.resultCount.set(this.results.length);
+      this.resultThumbs.set(this.results.map(resultThumb));
       this.resultIndex.set(0);
       this.mode.set('result');
       this.showResult(0);
@@ -1360,6 +1406,13 @@ export class App {
       alert(`Rectification failed: ${e instanceof Error ? e.message : e}`);
       this.mode.set('edit');
     }
+  }
+
+  /** Jump to another rectified photo (strip click or arrow keys). */
+  protected goToResult(i: number): void {
+    if (i < 0 || i >= this.resultCount() || i === this.resultIndex()) return;
+    this.resultIndex.set(i);
+    this.showResult(i);
   }
 
   /** Blit one rectified photo into the preview and reset its metadata fields. */
@@ -1440,16 +1493,17 @@ export class App {
     this.openToken++;
     this.image?.close();
     this.image = null;
-    this.revokeInfoUrl();
     this.images.set([]);
     this.currentIndex.set(-1);
     // the scratchpad intentionally survives a batch reset (it is persisted);
     // it has its own clear buttons
     this.quads.set([]);
     this.draft.set([]);
+    this.drafting.set(false);
     this.activeIdx.set(-1);
     this.results = [];
     this.resultCount.set(0);
+    this.resultThumbs.set([]);
     this.outSize.set(null);
     this.photoDate.set(null);
     this.dateField.set('');
@@ -1470,6 +1524,17 @@ function secondsToTime(total: number): string {
 function toIsoDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Downscale a rectified photo to a strip-sized dataURL (JPEG keeps it small). */
+function resultThumb(src: HTMLCanvasElement): string {
+  const h = 64;
+  const w = Math.max(1, Math.round((src.width / src.height) * h));
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  c.getContext('2d')!.drawImage(src, 0, 0, w, h);
+  return c.toDataURL('image/jpeg', 0.8);
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
