@@ -1,0 +1,19 @@
+/* Google Material Symbols, self-hosted so the app works offline */
+@import 'material-symbols/outlined.css';
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  /* no history back/forward on trackpad pan gestures */
+  overscroll-behavior: none;
+}
+
+body {
+  background: #0f172a;
+}
+
+app-root {
+  display: block;
+  height: 100%;
+}

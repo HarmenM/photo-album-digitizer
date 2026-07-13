@@ -1,0 +1,500 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* --- image drawer --- */
+
+.drawer {
+  width: 148px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1e293b;
+  border-right: 1px solid #334155;
+}
+
+.thumbs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.thumb {
+  position: relative;
+  padding: 0;
+  border: 2px solid #334155;
+  border-radius: 0.5rem;
+  background: #0f172a;
+  cursor: pointer;
+  overflow: hidden;
+  min-height: 60px;
+}
+
+.thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.thumb-ph {
+  display: block;
+  height: 80px;
+  background: #334155;
+}
+
+.thumb.current {
+  border-color: #22d3ee;
+}
+
+.thumb .thumb-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.75);
+  color: #cbd5e1;
+  font-size: 1rem;
+  line-height: 1.3rem;
+  text-align: center;
+}
+
+.thumb .thumb-remove:hover {
+  background: #b91c1c;
+  color: #fff;
+}
+
+.thumb .badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: #16a34a;
+  color: #fff;
+  font-size: 0.85rem;
+  line-height: 1.35rem;
+  text-align: center;
+}
+
+.thumb .badge.is-info {
+  background: #0891b2;
+}
+
+.drawer-actions {
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-top: 1px solid #334155;
+}
+
+.drawer-actions button {
+  font-size: 0.8rem;
+  padding: 0.4rem 0.5rem;
+}
+
+/* --- start screen --- */
+
+.dropzone {
+  margin: auto;
+  padding: 4rem 6rem;
+  border: 2px dashed #475569;
+  border-radius: 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.active {
+  border-color: #22d3ee;
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.dropzone h1 {
+  margin: 0 0 1rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.dropzone .big {
+  font-size: 1.15rem;
+  margin: 0.25rem 0;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+/* --- toolbar --- */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  flex-wrap: wrap;
+}
+
+.hint {
+  margin-right: auto;
+  color: #94a3b8;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  border: 1px solid #475569;
+  border-radius: 0.5rem;
+  background: #334155;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.toolbar .material-symbols-outlined {
+  font-size: 1.15rem;
+}
+
+button:hover:not(:disabled) {
+  background: #475569;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.primary {
+  background: #0891b2;
+  border-color: #0891b2;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #06b6d4;
+}
+
+/* --- metadata bar (result screen) --- */
+
+.meta-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: #16213a;
+  border-bottom: 1px solid #334155;
+  flex-wrap: wrap;
+}
+
+.meta-bar label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.meta-bar label.grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.meta-bar input {
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 0.4rem;
+  color: #e2e8f0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+  color-scheme: dark;
+}
+
+.meta-bar label.grow input {
+  flex: 1;
+}
+
+button.mic {
+  padding: 0.4rem 0.6rem;
+}
+
+.voice-chip {
+  color: #22d3ee;
+  background: #0f172a;
+  border: 1px solid #0891b2;
+  border-radius: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+/* --- scratchpad chips --- */
+
+.scratch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: #16213a;
+  border-bottom: 1px solid #334155;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.chip {
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 1rem;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.chip:hover {
+  border-color: #22d3ee;
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.chip.static {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.chip .x {
+  padding: 0 0.35rem;
+  border: none;
+  background: none;
+  color: #94a3b8;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.chip .x:hover {
+  color: #f87171;
+  background: none;
+}
+
+/* --- canvas area --- */
+
+.canvas-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 1rem;
+  overflow: auto; /* pan when zoomed in */
+  user-select: none;
+}
+
+.pannable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas-host,
+.info-image {
+  overscroll-behavior: none; /* keep pan gestures from triggering history navigation */
+}
+
+canvas {
+  margin: auto; /* centers when small, scrolls when zoomed */
+  flex-shrink: 0;
+  touch-action: none;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* --- info screen --- */
+
+.info-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.info-image {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: auto; /* pan when zoomed in */
+}
+
+.info-image img {
+  margin: auto;
+  flex-shrink: 0;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+}
+
+.scratch-panel {
+  width: 340px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+.scratch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.scratch-panel h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+button.clear-scratch {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.6rem;
+  color: #94a3b8;
+}
+
+button.clear-scratch:hover:not(:disabled) {
+  color: #f87171;
+}
+
+.scratch-row .clear-scratch {
+  margin-left: auto;
+}
+
+.scratch-panel h3 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.scratch-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.scratch-manual {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.scratch-manual input {
+  flex: 1;
+  min-width: 0;
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 0.4rem;
+  color: #e2e8f0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.scratch-manual button {
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  white-space: nowrap;
+}
+
+.scratch-panel .voice-chip {
+  display: block;
+  margin-top: 0.6rem;
+}
+
+.entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+/* --- precision loupe while dragging a corner --- */
+
+.loupe {
+  position: fixed;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  border: 3px solid #22d3ee;
+  background: #0f172a;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 20;
+}
+
+/* --- processing overlay --- */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.overlay-box {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 1.5rem 2.5rem;
+  text-align: center;
+}
+
+.overlay-box progress {
+  width: 240px;
+  accent-color: #22d3ee;
+}
+
+/* --- done screen --- */
+
+.done-box {
+  margin: auto;
+  text-align: center;
+}
+
+.done-box h1 {
+  font-size: 1.6rem;
+  margin-bottom: 0.75rem;
+}

@@ -1,0 +1,324 @@
+<main class="app">
+  <!-- image drawer -->
+  @if (images().length) {
+    <aside
+      class="drawer"
+      title="Shortcuts: ← previous photo · → next photo (while picking corners)"
+    >
+      <div class="thumbs">
+        @for (item of images(); track item.id; let i = $index) {
+          <button
+            class="thumb"
+            [class.current]="i === currentIndex()"
+            [title]="item.name"
+            (click)="openImage(i)"
+          >
+            @if (item.thumb) {
+              <img [src]="item.thumb" [alt]="item.name" />
+            } @else {
+              <span class="thumb-ph"></span>
+            }
+            @if (item.status !== 'pending') {
+              <span class="badge" [class.is-info]="item.status === 'info'">
+                {{ item.status === 'saved' ? '✓' : 'ℹ' }}
+              </span>
+            }
+            <span
+              class="thumb-remove"
+              (click)="removeImage(i, $event)"
+              title="Remove this photo from the batch"
+              >×</span
+            >
+          </button>
+        }
+      </div>
+      <div class="drawer-actions">
+        <button (click)="fileInput.click()">＋ Add photos</button>
+        <button (click)="reset()">✕ Clear batch</button>
+      </div>
+    </aside>
+  }
+
+  <div class="content">
+    <!-- start screen -->
+    <section class="screen" [style.display]="mode() === 'idle' ? '' : 'none'">
+      <div class="dropzone" [class.active]="dragOver()" (click)="fileInput.click()">
+        <h1>Photo Rectifier</h1>
+        <p class="big">Drop your JPG photos anywhere on this tab</p>
+        <p class="muted">or click here to browse — you can add a whole batch</p>
+      </div>
+    </section>
+
+    <!-- corner editing screen -->
+    <section
+      class="screen"
+      [style.display]="mode() === 'edit' || mode() === 'processing' ? '' : 'none'"
+    >
+      <div class="toolbar">
+        <span class="hint">{{ hint() }}</span>
+        <button
+          (click)="useInfo()"
+          [disabled]="mode() === 'processing'"
+          title="Don't rectify this photo — collect dates & descriptions from it instead (shortcut: I)"
+        >
+          <span class="material-symbols-outlined">info</span> Use info
+        </button>
+        <button
+          (click)="autoDetect()"
+          [disabled]="mode() === 'processing'"
+          title="Automatically detect the page corners (shortcut: D)"
+        >
+          <span class="material-symbols-outlined">auto_awesome</span> Detect corners
+        </button>
+        <button
+          (click)="rotate(-1)"
+          [disabled]="mode() === 'processing'"
+          title="Rotate 90° left (shortcut: L)"
+        >
+          <span class="material-symbols-outlined">rotate_left</span> Rotate left
+        </button>
+        <button
+          (click)="rotate(1)"
+          [disabled]="mode() === 'processing'"
+          title="Rotate 90° right (shortcut: R)"
+        >
+          <span class="material-symbols-outlined">rotate_right</span> Rotate right
+        </button>
+        <button
+          (click)="correctBoundaries()"
+          [disabled]="corners().length !== 4 || mode() === 'processing'"
+          title="Snap each corner to the strongest contrast edge within 50 px (shortcut: C)"
+        >
+          <span class="material-symbols-outlined">center_focus_strong</span> Correct boundaries
+        </button>
+        <button
+          (click)="shrinkQuad()"
+          [disabled]="corners().length !== 4 || mode() === 'processing'"
+          title="Move every edge of the selection 10 px inward (shortcut: S)"
+        >
+          <span class="material-symbols-outlined">zoom_in_map</span> Shrink 10 px
+        </button>
+        <button (click)="clearCorners()" [disabled]="corners().length === 0 || mode() === 'processing'">
+          <span class="material-symbols-outlined">layers_clear</span> Clear corners
+        </button>
+        <button
+          class="primary"
+          (click)="apply()"
+          [disabled]="corners().length !== 4 || mode() === 'processing'"
+          [title]="'Crop & rectify using these corners (shortcut: ' + confirmKey + ')'"
+        >
+          <span class="material-symbols-outlined">crop</span> Apply
+        </button>
+      </div>
+      <div class="canvas-host" #canvasHost (wheel)="onWheel($event)">
+        <canvas
+          #editCanvas
+          (pointerdown)="onPointerDown($event)"
+          (pointermove)="onPointerMove($event)"
+          (pointerup)="onPointerUp($event)"
+          (pointercancel)="onPointerUp($event)"
+        ></canvas>
+      </div>
+      <canvas
+        class="loupe"
+        #loupeCanvas
+        [style.display]="loupeVisible() ? '' : 'none'"
+      ></canvas>
+      @if (mode() === 'processing') {
+        <div class="overlay">
+          <div class="overlay-box">
+            <p>Rectifying… {{ (progress() * 100).toFixed(0) }}%</p>
+            <progress [value]="progress()" max="1"></progress>
+          </div>
+        </div>
+      }
+    </section>
+
+    <!-- result screen: preview + metadata -->
+    <section class="screen" [style.display]="mode() === 'result' ? '' : 'none'">
+      <div class="toolbar">
+        @if (outSize(); as s) {
+          <span class="hint">Rectified — {{ s.w }} × {{ s.h }} px</span>
+        }
+        <button (click)="rotate(-1)" title="Rotate 90° left (shortcut: L)">
+          <span class="material-symbols-outlined">rotate_left</span> Rotate left
+        </button>
+        <button (click)="rotate(1)" title="Rotate 90° right (shortcut: R)">
+          <span class="material-symbols-outlined">rotate_right</span> Rotate right
+        </button>
+        <button (click)="backToEdit()" title="Back to the corner editor (shortcut: Esc)">
+          <span class="material-symbols-outlined">arrow_back</span> Back to corners
+        </button>
+        <button
+          class="primary"
+          (click)="save()"
+          [title]="'Save PNG + XMP sidecar and go to the next photo (shortcut: ' + confirmKey + ')'"
+        >
+          <span class="material-symbols-outlined">save</span> Save &amp; next
+        </button>
+      </div>
+      <div class="meta-bar">
+        <label title="Date">
+          📅
+          <input type="date" [value]="dateField()" (input)="onDateField($event)" />
+        </label>
+        <label title="Time">
+          🕐
+          <input type="time" step="1" [value]="timeField()" (input)="onTimeField($event)" />
+        </label>
+        <label class="grow">
+          📝 Description
+          <input
+            type="text"
+            [value]="descriptionField()"
+            (input)="onDescriptionField($event)"
+            placeholder="Describe this photo…"
+          />
+        </label>
+        <button
+          class="mic"
+          (click)="dictate('field')"
+          [disabled]="listening()"
+          title="Say the description out loud"
+        >
+          🎤
+        </button>
+        @if (voiceStatus(); as vs) {
+          <span class="voice-chip">{{ vs }}</span>
+        }
+      </div>
+      @if (scratchpad().length) {
+        <div class="scratch-row">
+          <span class="muted">From scratchpad:</span>
+          @for (e of scratchDates(); track e.id) {
+            <button class="chip" (click)="applyScratch(e)" title="Use as date">📅 {{ e.text }}</button>
+          }
+          @for (e of scratchDescriptions(); track e.id) {
+            <button class="chip" (click)="applyScratch(e)" title="Use as description">
+              📝 {{ e.text }}
+            </button>
+          }
+          <button class="clear-scratch" (click)="clearScratchpad()" title="Remove all scratchpad entries">
+            ✕ Clear scratchpad
+          </button>
+        </div>
+      }
+      <div
+        class="canvas-host pannable"
+        #resultHost
+        (wheel)="onWheel($event)"
+        (pointerdown)="startPan($event)"
+        (pointermove)="movePan($event)"
+        (pointerup)="endPan($event)"
+        (pointercancel)="endPan($event)"
+      >
+        <canvas #resultCanvas class="result-canvas"></canvas>
+      </div>
+    </section>
+
+    <!-- info screen: fill the scratchpad from a context page -->
+    <section class="screen" [style.display]="mode() === 'info' ? '' : 'none'">
+      <div class="toolbar">
+        <span class="hint">
+          Collect dates &amp; descriptions from this page — they can be used in other photos.
+        </span>
+        <button (click)="backToEdit()" title="Back to the corner editor (shortcut: Esc)">
+          <span class="material-symbols-outlined">arrow_back</span> Back to corners
+        </button>
+        <button
+          class="primary"
+          (click)="infoDone()"
+          [title]="'Close this info page and go to the next photo (shortcut: ' + confirmKey + ')'"
+        >
+          <span class="material-symbols-outlined">check</span> Done, next image
+        </button>
+      </div>
+      <div class="info-body">
+        <div
+          class="info-image pannable"
+          (wheel)="onWheel($event)"
+          (pointerdown)="startPan($event)"
+          (pointermove)="movePan($event)"
+          (pointerup)="endPan($event)"
+          (pointercancel)="endPan($event)"
+        >
+          <img
+            #infoImg
+            [attr.src]="infoUrl()"
+            [hidden]="!infoUrl()"
+            (load)="layoutInfoImage()"
+            draggable="false"
+            alt="Context page"
+          />
+        </div>
+        <div class="scratch-panel">
+          <div class="scratch-head">
+            <h2>Scratchpad</h2>
+            <button
+              class="clear-scratch"
+              (click)="clearScratchpad()"
+              [disabled]="!scratchpad().length"
+              title="Remove all scratchpad entries"
+            >
+              ✕ Clear all
+            </button>
+          </div>
+          <div class="scratch-buttons">
+            <button (click)="dictate('scratchpad')" [disabled]="listening()">
+              🎤 {{ listening() ? 'Listening…' : 'Dictate a description' }}
+            </button>
+          </div>
+          <div class="scratch-manual">
+            <input
+              #scratchText
+              type="text"
+              placeholder="…or type here (Enter adds; dates are recognized)"
+              (keydown.enter)="addScratchAuto(scratchText.value, scratchText)"
+            />
+            <button (click)="addScratchText('date', scratchText.value, scratchText)">+ date</button>
+            <button (click)="addScratchText('description', scratchText.value, scratchText)">
+              + description
+            </button>
+          </div>
+          @if (voiceStatus(); as vs) {
+            <div class="voice-chip">{{ vs }}</div>
+          }
+          <h3>Dates</h3>
+          <div class="entries">
+            @for (e of scratchDates(); track e.id) {
+              <span class="chip static">
+                📅 {{ e.text }}
+                <button class="x" (click)="removeScratch(e.id)" title="Remove">×</button>
+              </span>
+            } @empty {
+              <span class="muted">none yet</span>
+            }
+          </div>
+          <h3>Descriptions</h3>
+          <div class="entries">
+            @for (e of scratchDescriptions(); track e.id) {
+              <span class="chip static">
+                📝 {{ e.text }}
+                <button class="x" (click)="removeScratch(e.id)" title="Remove">×</button>
+              </span>
+            } @empty {
+              <span class="muted">none yet</span>
+            }
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- all done -->
+    <section class="screen" [style.display]="mode() === 'done' ? '' : 'none'">
+      <div class="done-box">
+        <h1>All photos processed 🎉</h1>
+        <p>{{ savedCount() }} saved · {{ infoCount() }} used as info</p>
+        <p class="muted">Drop more photos anywhere to continue, or start a new batch.</p>
+        <button class="primary" (click)="reset()">Start a new batch</button>
+      </div>
+    </section>
+  </div>
+
+  <input #fileInput type="file" accept="image/*" multiple hidden (change)="onFileInput($event)" />
+</main>
