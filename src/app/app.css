@@ -170,10 +170,23 @@
   background: rgba(34, 211, 238, 0.08);
 }
 
+.dropzone .logo {
+  width: 112px;
+  height: 112px;
+  margin-bottom: 1.25rem;
+}
+
 .dropzone h1 {
   margin: 0 0 1rem;
   font-size: 1.5rem;
   font-weight: 600;
+}
+
+.dropzone .privacy {
+  margin: 2rem auto 0;
+  max-width: 420px;
+  font-size: 0.85rem;
+  color: #94a3b8;
 }
 
 .dropzone .big {

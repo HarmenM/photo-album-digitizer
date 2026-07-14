@@ -44,9 +44,40 @@
     <!-- start screen -->
     <section class="screen" [style.display]="mode() === 'idle' ? '' : 'none'">
       <div class="dropzone" [class.active]="dragOver()" (click)="fileInput.click()">
+        <!-- logo: a tilted photo print inside the detection marquee -->
+        <svg class="logo" viewBox="0 0 120 120" fill="none" role="img" aria-label="">
+          <g transform="rotate(-8 60 62)">
+            <rect x="30" y="30" width="60" height="64" rx="2.5" fill="#f1f5f9" />
+            <rect x="36" y="36" width="48" height="44" fill="#475569" />
+            <circle cx="50" cy="47" r="4.5" fill="#cbd5e1" />
+            <path d="M36 80 L52 60 L62 70 L72 60 L84 74 L84 80 Z" fill="#94a3b8" />
+          </g>
+          <path
+            d="M23.2 32.3 L87.3 23.3 L96.9 91.7 L32.8 100.8 Z"
+            stroke="#22d3ee"
+            stroke-width="2.5"
+            stroke-dasharray="7 5"
+          />
+          <circle cx="23.2" cy="32.3" r="4" fill="#e2e8f0" stroke="#22d3ee" stroke-width="2.5" />
+          <circle cx="87.3" cy="23.3" r="4" fill="#e2e8f0" stroke="#22d3ee" stroke-width="2.5" />
+          <circle cx="96.9" cy="91.7" r="4" fill="#e2e8f0" stroke="#22d3ee" stroke-width="2.5" />
+          <circle cx="32.8" cy="100.8" r="4" fill="#e2e8f0" stroke="#22d3ee" stroke-width="2.5" />
+          <rect
+            x="-3.2"
+            y="-3.2"
+            width="6.4"
+            height="6.4"
+            transform="translate(55.3 27.8) rotate(45)"
+            fill="#f59e0b"
+          />
+        </svg>
         <h1>Photo Album Digitizer</h1>
         <p class="big">Drop your JPG photos anywhere on this tab</p>
         <p class="muted">or click here to browse — you can add a whole batch</p>
+        <p class="privacy">
+          🔒 This app is 100% privacy-friendly: all images and info are processed locally — nothing
+          ever leaves your computer.
+        </p>
       </div>
     </section>
 
@@ -179,7 +210,7 @@
       <div class="toolbar">
         @if (outSize(); as s) {
           <span class="hint">
-            Rectified — {{ s.w }} × {{ s.h }} px
+            {{ s.w }} × {{ s.h }} px
             @if (resultCount() > 1) {
               · photo {{ resultIndex() + 1 }} / {{ resultCount() }}
             }
