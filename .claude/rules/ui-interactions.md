@@ -3,42 +3,80 @@
 Keyboard shortcuts (all surfaced in button tooltips — update the tooltip when
 you change a binding):
 
-- `R` / `L` rotate, `D` re-detect photos (repeated presses retry at climbing
-  threshold levels 0.6 → 0.7 → 0.8 → 0.9; the cycle resets after 2 s without
-  a press or on a photo switch), `S` shrink active rectangle 10 px,
+- `R` / `L` rotate, `S` shrink active rectangle 10 px,
   `C` correct boundaries of the active rectangle (snap corners to contrast
-  edges), `Delete`/`Backspace` cancel an in-progress rectangle or else delete
-  the active rectangle.
+  edges; progressive — a repeat press within 2 s widens the search: L, XL,
+  shown as a badge on the button and reset by 2 s of inactivity, Reset, or
+  an image switch). Each snap flashes dashed amber circles around the
+  pre-snap corners for 1 s showing the searched area (experimental; the
+  `snapFlash` field, its timer and the redraw block are the whole feature —
+  delete those to revert). `Delete`/`Backspace` cancel an in-progress
+  rectangle or else delete the active rectangle. There is deliberately no detect shortcut/button:
+  detection runs on first visit and via the toolbar's **Reset** (remove all
+  rectangles + detect afresh, same snap + 5 px shrink flow).
 - `←` / `→` previous/next photo (edit mode); on the result screen they step
   through the rectified photos instead.
 - `Alt/⌘ + Enter` confirms the current phase (Apply / Save & next)
   and must keep working **while an input is focused**.
 - `Esc` cancels an in-progress rectangle in the editor, and returns from
   the result screen to the corner editor; inside an input the first `Esc`
-  blurs, the second exits.
+  blurs, the second exits. On the result screen `Backspace` and the browser
+  **Back** button behave like `Esc` (Backspace still deletes text while an
+  input is focused — the input guard runs first). Back works via a history
+  entry pushed on entering the result (popstate → `backToEdit`), consumed
+  again by every other exit — keep push and pop paired or Back starts
+  leaving the app / reopening stale screens.
 - `Ctrl/⌘ +/−/0` zooms previews; pinch arrives as ctrl+wheel; plain scroll pans.
 
 Interaction invariants:
+
+- Edit-toolbar layout (groups separated by vertical dividers): rotate
+  left/right (icon-only) | Mark another photo · Correct boundaries | Shrink
+  border · Delete | Reset (drop all rectangles + auto-detect afresh) |
+  Apply | ZIP split button (zip download style only) | settings cogwheel
+  (icon-only). The result toolbar's rotate buttons are icon-only too and it
+  ends with the same ZIP split button + cogwheel.
+- Settings live in a modal behind the cogwheel (Esc or backdrop click
+  closes): JPG quality slider and the download style radios. The ZIP split
+  button's main half downloads the archive, the right segment opens the
+  collection page — a screen listing every collected photo with a × to
+  remove it (Esc or Back returns to where you came from; the page is only
+  reachable in zip mode).
 
 - Multiple photo rectangles per image; exactly one is active. The active one
   shows corner dots and amber ◆ midpoint grips (drag a corner / slide a whole
   edge along its normal); inactive ones render dashed and are activated by
   clicking inside them. Dragging empty canvas pans; a plain click does
   nothing on its own.
-- New rectangles are drawn deliberately, never by stray clicks: the "Add
-  photo" toolbar button enters drafting mode (button renders active),
-  then four plain clicks place the corners — the fourth completes the
-  rectangle, which snaps and becomes active, and drafting ends. While
+- New rectangles are drawn deliberately, never by stray clicks: the "Mark
+  another photo" toolbar button enters drafting mode (button renders
+  active), then four plain clicks place the corners — the fourth completes
+  the rectangle, which snaps and becomes active, and drafting ends. While
   drafting, only the draft's own corners are draggable (edge grips and
   rectangle activation are suspended so they can't swallow corner clicks).
   Cancel by pressing the button again, `Esc`, or `Delete`.
 - Each rectangle shows its crop-order number in a bubble at its centroid,
   matching the "photo i / n" counter in the preview step — but only when
   there are two or more rectangles (a lone rectangle carries no number).
+  Rotating the image renumbers: the quads are re-sorted into the new
+  orientation's reading order (top-left first, bottom-right last, via
+  `readingOrder` in `corner-detect.ts`), so the numbers never stay glued to
+  the pre-rotation order; the active rectangle stays active across the
+  reorder.
 - The result screen has a bottom strip with one numbered thumbnail per
   rectified photo (click or `←`/`→` to jump); like the centroid bubbles it
   only appears when there are two or more. Rotating a result persists into
   its stored canvas, so the strip thumb and a later revisit stay in sync.
+- Each rectified photo is saved ("Save & next") or closed unsaved ("Close
+  photo") individually: saved thumbs get a green ✓ badge (same style as the
+  drawer), closed ones render dimmed. Save/close shows the next pending
+  photo — the last pending one when nothing follows — and only when none
+  are pending does the queue advance to the next image. Don't restore the
+  old advance-on-last-save: it silently dropped unsaved photos.
+- "Use previous" in the metadata bar refills date, time and description
+  from the last save that carried input; hand-entered metadata also becomes
+  scratchpad chips on save (deduped). Date chips carry a "+1d" mini-button
+  (left of the ×) that applies the chip's date shifted one day forward.
 - While dragging a corner, the circular precision loupe follows the pointer:
   full-res magnified image, cyan outer crosshair, red-on-white center cross at
   the exact corner position, flipping below the pointer near the top edge.
@@ -46,7 +84,11 @@ Interaction invariants:
   must never trigger browser history-back. Don't remove it.
 - Thumbnails refresh on rotate and each has an × remove button, a ✓ badge
   when saved, and a bottom-left count badge with the number of photo
-  rectangles on that image.
+  rectangles on that image. Drawer thumbs never flex-shrink — a full drawer
+  scrolls instead of squashing them.
+- Dropping (or picking) new files opens the first newly added image right
+  away, from any screen except mid-warp (`processing`) — current rectangles
+  are stashed per queue item, so nothing is lost by the jump.
 - The scratchpad is an always-visible right side panel on the editor and
   result screens (no separate page or mode). Entries can be added anytime
   (typed or dictated); on the result screen the chips become clickable and

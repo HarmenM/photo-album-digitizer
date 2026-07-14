@@ -7,13 +7,26 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { detectPageCorners, detectPhotoRects, snapCornersToEdges } from './corner-detect';
-import { parseSpokenDate, readExifDate } from './exif';
+import {
+  SNAP_RADIUS,
+  detectPageCorners,
+  detectPhotoRects,
+  readingOrder,
+  snapCornersToEdges,
+} from './corner-detect';
+import { embedExifJpeg, parseSpokenDate, readExifDate } from './exif';
 import { Point, computeHomography, insetQuad, sortCorners, warpPerspective } from './homography';
-import { buildXmpSidecar } from './xmp';
+import { amsterdamOffset } from './xmp';
+import { ZipEntry, buildZip } from './zip';
 
-type Mode = 'idle' | 'edit' | 'processing' | 'result' | 'done';
+type Mode = 'idle' | 'edit' | 'processing' | 'result' | 'collection' | 'done';
 type ImageStatus = 'pending' | 'saved';
+type DownloadStyle = 'single' | 'zip';
+
+/** A saved photo held for the batch ZIP (zip download style). */
+interface CollectedPhoto extends ZipEntry {
+  thumb: string; // small dataURL for the collection page
+}
 
 interface QueueItem {
   id: number;
@@ -56,13 +69,21 @@ interface Recognition {
 }
 
 const HIT_RADIUS_CSS_PX = 16;
-const SCRATCH_STORAGE_KEY = 'photo-rectifier.scratchpad';
+const SCRATCH_STORAGE_KEY = 'photo-album-digitizer.scratchpad';
+const SETTINGS_STORAGE_KEY = 'photo-album-digitizer.settings';
+// pre-rename keys ("Photo Rectifier"), still read as a fallback so existing
+// scratchpads and settings survive the rename
+const OLD_SCRATCH_STORAGE_KEY = 'photo-rectifier.scratchpad';
+const OLD_SETTINGS_STORAGE_KEY = 'photo-rectifier.settings';
 const DEFAULT_TIME = '12:00:00';
-// Repeated D presses / Detect clicks re-run detection at climbing threshold
-// levels for pages whose light photo content gets trimmed at the default;
-// the cycle resets to the first level after a pause or on a photo switch.
-const DETECT_LEVELS = [0.6, 0.7, 0.8, 0.9];
-const DETECT_LEVEL_RESET_MS = 2000;
+const DEFAULT_JPEG_QUALITY = 0.95;
+const DEFAULT_FILENAME_SUFFIX = '-result';
+// progressive boundary correction: pressing C / the button again within 2 s
+// widens the snap search box (normal ±25 → L ±50 → XL ±100)
+const SNAP_RADII = [SNAP_RADIUS, SNAP_RADIUS * 2, SNAP_RADIUS * 4];
+const SNAP_BADGES = ['', 'L', 'XL'];
+const SNAP_ESCALATE_MS = 2000;
+const SNAP_FLASH_MS = 1000; // how long the search-area circles stay visible
 
 @Component({
   selector: 'app-root',
@@ -84,6 +105,36 @@ export class App {
   // rectified photos of the current image, shown one at a time
   private results: HTMLCanvasElement[] = [];
   protected readonly resultIndex = signal(0);
+  // per rectified photo: saved, closed without saving, or still pending —
+  // the result screen only advances to the next image when none are pending
+  protected readonly resultStatus = signal<('pending' | 'saved' | 'closed')[]>([]);
+  // metadata of the last save with actual input, for the "use previous" button
+  protected readonly lastMeta = signal<{ date: string; time: string; description: string } | null>(
+    null,
+  );
+  // photos collected for the batch ZIP (zip download style) — the ZIP
+  // entries carry the photo's date as file date, which a plain download
+  // cannot; re-processing a photo appends under a higher number suffix
+  protected readonly zipEntries = signal<CollectedPhoto[]>([]);
+
+  // --- settings (persisted in localStorage) ---
+  protected readonly settingsOpen = signal(false);
+  protected readonly jpegQuality = signal(DEFAULT_JPEG_QUALITY);
+  protected readonly downloadStyle = signal<DownloadStyle>('single');
+  // appended to the source name in saved file names (may be empty)
+  protected readonly filenameSuffix = signal(DEFAULT_FILENAME_SUFFIX);
+
+  // progressive boundary correction (see SNAP_RADII): the escalation level
+  // of the last snap; > 0 shows as the L/XL badge on the button
+  protected readonly snapLevel = signal(0);
+  protected readonly snapBadge = computed(() => SNAP_BADGES[this.snapLevel()]);
+  private snapLevelTimer: ReturnType<typeof setTimeout> | null = null;
+  // search-area visualisation: circles around the pre-snap corners, shown
+  // for SNAP_FLASH_MS after each snap (this field, its timer and the block
+  // in redraw() are the whole feature — delete those to revert it)
+  private snapFlash: { centers: Point[]; radius: number } | null = null;
+  private snapFlashTimer: ReturnType<typeof setTimeout> | null = null;
+  private returnMode: Mode = 'edit'; // where the collection page goes back to
   protected readonly resultCount = signal(0);
   // small dataURLs for the bottom strip on the result screen (2+ photos only)
   protected readonly resultThumbs = signal<string[]>([]);
@@ -133,7 +184,7 @@ export class App {
       return `Click the corners of a photo — ${4 - this.draft().length} to go (Esc cancels)`;
     }
     const n = this.quads().length;
-    if (n === 0) return 'No photos marked — detect (D) or add a photo';
+    if (n === 0) return 'No photos marked — press Reset to re-detect, or mark one manually';
     return `${n} photo${n > 1 ? 's' : ''} selected`;
   });
 
@@ -145,8 +196,7 @@ export class App {
 
   private image: ImageBitmap | null = null;
   private baseName = 'photo';
-  private detectLevelIdx = 0; // position in the DETECT_LEVELS cycle
-  private detectLevelTimer: ReturnType<typeof setTimeout> | null = null;
+  private prevMode: Mode = 'idle'; // previous mode, for the result-screen history entry
   private viewScale = 1;
   private renderScale = 1; // image px -> canvas backing-store px
   private dragIndex = -1;
@@ -170,7 +220,8 @@ export class App {
   constructor() {
     // the scratchpad survives reloads via localStorage
     try {
-      const raw = localStorage.getItem(SCRATCH_STORAGE_KEY);
+      const raw =
+        localStorage.getItem(SCRATCH_STORAGE_KEY) ?? localStorage.getItem(OLD_SCRATCH_STORAGE_KEY);
       if (raw) {
         const entries = (JSON.parse(raw) as ScratchEntry[]).filter(
           (e) =>
@@ -187,6 +238,55 @@ export class App {
     }
     effect(() => {
       localStorage.setItem(SCRATCH_STORAGE_KEY, JSON.stringify(this.scratchpad()));
+    });
+    // settings survive reloads too
+    try {
+      const raw =
+        localStorage.getItem(SETTINGS_STORAGE_KEY) ??
+        localStorage.getItem(OLD_SETTINGS_STORAGE_KEY);
+      if (raw) {
+        const s = JSON.parse(raw) as {
+          jpegQuality?: unknown;
+          downloadStyle?: unknown;
+          filenameSuffix?: unknown;
+        };
+        if (typeof s.jpegQuality === 'number' && s.jpegQuality >= 0.5 && s.jpegQuality <= 1) {
+          this.jpegQuality.set(s.jpegQuality);
+        }
+        if (s.downloadStyle === 'single' || s.downloadStyle === 'zip') {
+          this.downloadStyle.set(s.downloadStyle);
+        }
+        if (typeof s.filenameSuffix === 'string' && s.filenameSuffix.length <= 40) {
+          this.filenameSuffix.set(sanitizeSuffix(s.filenameSuffix));
+        }
+      }
+    } catch {
+      // corrupted storage — keep the defaults
+    }
+    effect(() => {
+      localStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify({
+          jpegQuality: this.jpegQuality(),
+          downloadStyle: this.downloadStyle(),
+          filenameSuffix: this.filenameSuffix(),
+        }),
+      );
+    });
+    // The browser Back button leaves the result screen like Esc does:
+    // entering the result pushes a history entry (so Back has something to
+    // pop instead of leaving the app), and any other exit — Esc, Save &
+    // next, opening another photo — consumes that entry again so history
+    // does not accumulate. onPopState handles the Back press itself.
+    effect(() => {
+      const mode = this.mode();
+      const was = this.prevMode;
+      this.prevMode = mode;
+      if (mode === 'result' && was !== 'result') {
+        history.pushState({ resultScreen: true }, '');
+      } else if (was === 'result' && mode !== 'result' && history.state?.resultScreen) {
+        history.back();
+      }
     });
   }
 
@@ -235,7 +335,10 @@ export class App {
       rotation: 0,
     }));
     this.images.update((list) => [...list, ...newItems]);
-    if (this.mode() === 'idle' || this.mode() === 'done') void this.openImage(firstNew);
+    // newly added photos take the stage: open the first of them right away
+    // (unless a warp is in flight — never yank the screen mid-processing).
+    // Current quads are stashed by openImage, so nothing is lost.
+    if (this.mode() !== 'processing') void this.openImage(firstNew);
     for (const item of newItems) {
       const thumb = await this.makeThumb(item.file).catch(() => '');
       this.images.update((list) => list.map((it) => (it.id === item.id ? { ...it, thumb } : it)));
@@ -298,9 +401,7 @@ export class App {
     this.draft.set([]);
     this.drafting.set(false);
     this.activeIdx.set(-1);
-    // new photo: the D-shortcut threshold cycle starts over
-    if (this.detectLevelTimer) clearTimeout(this.detectLevelTimer);
-    this.detectLevelIdx = 0;
+    this.resetSnapLevel();
     let bmp: ImageBitmap;
     try {
       bmp = await createImageBitmap(item.file, { imageOrientation: 'from-image' });
@@ -328,6 +429,7 @@ export class App {
     this.results = [];
     this.resultCount.set(0);
     this.resultThumbs.set([]);
+    this.resultStatus.set([]);
     this.outSize.set(null);
     this.photoDate.set(null);
     this.setVoiceStatus(null);
@@ -387,24 +489,17 @@ export class App {
 
   /**
    * Detect all photographs on the image automatically (falling back to the
-   * single page outline when none are found). On the first visit of an image
-   * (manual = false) every detected rectangle is refined further: snap the
-   * corners to the full-res contrast boundary, then step 5 px inward so the
-   * default crop carries no background sliver. The D shortcut / toolbar
-   * button runs the plain detection only, and repeated presses climb the
-   * DETECT_LEVELS threshold cycle (reset by a 2 s pause or a photo switch).
+   * single page outline when none are found), always at the automatic
+   * threshold (the climb in corner-detect.ts). Every detected rectangle is
+   * refined further: snap the corners to the full-res contrast boundary,
+   * then step 5 px inward so the default crop carries no background sliver.
+   * Runs on the first visit of an image (manual = false, silent when nothing
+   * is found) and as the second half of the toolbar's Reset.
    */
   protected autoDetect(manual = true): void {
     const img = this.image;
     if (!img || this.mode() !== 'edit') return;
-    let level = DETECT_LEVELS[0];
-    if (manual) {
-      level = DETECT_LEVELS[this.detectLevelIdx];
-      this.detectLevelIdx = (this.detectLevelIdx + 1) % DETECT_LEVELS.length;
-      if (this.detectLevelTimer) clearTimeout(this.detectLevelTimer);
-      this.detectLevelTimer = setTimeout(() => (this.detectLevelIdx = 0), DETECT_LEVEL_RESET_MS);
-    }
-    let found = detectPhotoRects(img, level);
+    let found = detectPhotoRects(img);
     if (!found.length) {
       const page = detectPageCorners(img);
       if (page) found = [page];
@@ -412,13 +507,11 @@ export class App {
     if (found.length) {
       this.draft.set([]);
       this.drafting.set(false);
-      if (!manual) {
-        found = found.map((q) => {
-          const snapped = snapCornersToEdges(img, q).map((p) => this.clampToImage(p));
-          const inset = insetQuad(sortCorners(snapped), 5);
-          return inset ? inset.map((p) => this.clampToImage(p)) : snapped;
-        });
-      }
+      found = found.map((q) => {
+        const snapped = snapCornersToEdges(img, q).map((p) => this.clampToImage(p));
+        const inset = insetQuad(sortCorners(snapped), 5);
+        return inset ? inset.map((p) => this.clampToImage(p)) : snapped;
+      });
       this.quads.set(found);
       this.activeIdx.set(0);
       this.redraw();
@@ -458,8 +551,9 @@ export class App {
   protected layoutResultCanvas(): void {
     const rc = this.resultCanvas().nativeElement;
     const host = this.resultHost().nativeElement;
-    if (!rc.width || !rc.height || !host.clientWidth || !host.clientHeight) return;
-    const fit = Math.min(host.clientWidth / rc.width, host.clientHeight / rc.height, 1);
+    const { w, h } = hostContentSize(host);
+    if (!rc.width || !rc.height || w <= 0 || h <= 0) return;
+    const fit = Math.min(w / rc.width, h / rc.height, 1);
     const z = fit * this.zoom();
     rc.style.width = `${rc.width * z}px`;
     rc.style.height = `${rc.height * z}px`;
@@ -467,18 +561,48 @@ export class App {
 
   /**
    * Snap each corner of the active rectangle onto the photo's contrast
-   * boundary, searching a 50 px box around it. Runs automatically on every
-   * newly completed rectangle (auto-detect, fourth click) but never after a
-   * manual drag — the loupe exists for deliberate placement, and snapping
-   * would fight it.
+   * boundary. Progressive: a repeat press within 2 s widens the search box
+   * (±25 px → L ±50 → XL ±100, shown as a badge on the button); 2 s of
+   * inactivity, a Reset or an image switch drop back to normal. Runs
+   * automatically on every newly completed rectangle (auto-detect, fourth
+   * click) but never after a manual drag — the loupe exists for deliberate
+   * placement, and snapping would fight it.
    */
   protected correctBoundaries(): void {
     const img = this.image;
     const a = this.activeIdx();
     if (!img || this.mode() !== 'edit' || a < 0) return;
-    const snapped = snapCornersToEdges(img, this.quads()[a]).map((p) => this.clampToImage(p));
+    const level = this.snapLevelTimer ? Math.min(this.snapLevel() + 1, SNAP_RADII.length - 1) : 0;
+    this.snapLevel.set(level);
+    if (this.snapLevelTimer) clearTimeout(this.snapLevelTimer);
+    this.snapLevelTimer = setTimeout(() => {
+      this.snapLevelTimer = null;
+      this.snapLevel.set(0);
+    }, SNAP_ESCALATE_MS);
+    const before = this.quads()[a];
+    // flash the searched areas: the snap looks around the PRE-snap corners
+    this.snapFlash = { centers: before.map((p) => ({ ...p })), radius: SNAP_RADII[level] };
+    if (this.snapFlashTimer) clearTimeout(this.snapFlashTimer);
+    this.snapFlashTimer = setTimeout(() => {
+      this.snapFlashTimer = null;
+      this.snapFlash = null;
+      this.redraw();
+    }, SNAP_FLASH_MS);
+    const snapped = snapCornersToEdges(img, before, SNAP_RADII[level]).map((p) =>
+      this.clampToImage(p),
+    );
     this.quads.update((qs) => qs.map((q, i) => (i === a ? snapped : q)));
     this.redraw();
+  }
+
+  /** Back to the normal search box: image switched or rectangles reset. */
+  private resetSnapLevel(): void {
+    if (this.snapLevelTimer) clearTimeout(this.snapLevelTimer);
+    this.snapLevelTimer = null;
+    this.snapLevel.set(0);
+    if (this.snapFlashTimer) clearTimeout(this.snapFlashTimer);
+    this.snapFlashTimer = null;
+    this.snapFlash = null;
   }
 
   /** Move every edge of the active rectangle 10 px inward. */
@@ -643,15 +767,23 @@ export class App {
   }
 
   /**
-   * Use a scratchpad entry as the current date or description. Every use of a
-   * date advances its time by one second (12:00:00, 12:00:01, …) so photos
-   * sharing a date keep a stable chronological order. Only meaningful on the
-   * result screen — the panel is always visible, but the metadata fields are
-   * not, so a chip click elsewhere does nothing.
+   * Use a scratchpad entry as the current date or description. Every plain
+   * use of a date advances its time by one second (12:00:00, 12:00:01, …) so
+   * photos sharing a date keep a stable chronological order. A `dayOffset`
+   * applies the date shifted by whole days (the chips' "+1d" mini-button) —
+   * that is a different day, so it stamps a plain 12:00:00 and leaves the
+   * entry's use counter alone. Only meaningful on the result screen — the
+   * panel is always visible, but the metadata fields are not, so a chip
+   * click elsewhere does nothing.
    */
-  protected applyScratch(entry: ScratchEntry): void {
+  protected applyScratch(entry: ScratchEntry, dayOffset = 0): void {
     if (this.mode() !== 'result') return;
     if (entry.kind === 'date' && entry.dateIso) {
+      if (dayOffset) {
+        this.dateField.set(addDaysIso(entry.dateIso, dayOffset));
+        this.timeField.set(DEFAULT_TIME);
+        return;
+      }
       const used = entry.used ?? 0;
       this.dateField.set(entry.dateIso);
       this.timeField.set(secondsToTime(12 * 3600 + used));
@@ -667,9 +799,16 @@ export class App {
     this.results = []; // discard pending rectified photos
     this.resultCount.set(0);
     this.resultThumbs.set([]);
+    this.resultStatus.set([]);
     this.resetZoom();
     this.mode.set('edit');
     requestAnimationFrame(() => this.layoutEditCanvas());
+  }
+
+  /** The browser Back button leaves the result screen exactly like Esc. */
+  @HostListener('window:popstate')
+  protected onPopState(): void {
+    if (this.mode() === 'result') this.backToEdit();
   }
 
   // --- rotation --------------------------------------------------------------
@@ -679,6 +818,15 @@ export class App {
 
   @HostListener('window:keydown', ['$event'])
   protected onKeyDown(ev: KeyboardEvent): void {
+    // the settings modal and the collection page capture Escape first
+    if (ev.key === 'Escape' && this.settingsOpen()) {
+      this.settingsOpen.set(false);
+      return;
+    }
+    if (ev.key === 'Escape' && this.mode() === 'collection') {
+      this.backFromCollection();
+      return;
+    }
     // Alt/Cmd+Enter confirms the current phase: apply or save.
     // Checked before the input guard so it also works while typing metadata.
     if (ev.key === 'Enter' && (ev.altKey || ev.metaKey)) {
@@ -724,8 +872,11 @@ export class App {
       return;
     }
 
-    // Escape returns from the result screen to the corner editor
-    if (ev.key === 'Escape' && this.mode() === 'result') {
+    // Escape or Backspace returns from the result screen to the corner
+    // editor (the input guard above keeps Backspace deleting text in the
+    // metadata fields)
+    if ((ev.key === 'Escape' || ev.key === 'Backspace') && this.mode() === 'result') {
+      ev.preventDefault();
       this.backToEdit();
       return;
     }
@@ -760,7 +911,6 @@ export class App {
     const key = ev.key.toLowerCase();
     if (key === 'r') void this.rotate(1);
     else if (key === 'l') void this.rotate(-1);
-    else if (key === 'd' && this.mode() === 'edit') this.autoDetect();
     else if (key === 's' && this.mode() === 'edit') this.shrinkQuad();
     else if (key === 'c' && this.mode() === 'edit') this.correctBoundaries();
     else if ((ev.key === 'Delete' || ev.key === 'Backspace') && this.mode() === 'edit') {
@@ -804,6 +954,12 @@ export class App {
     const mapPt = (p: Point) => (dir === 1 ? { x: oldH - p.y, y: p.x } : { x: p.y, y: oldW - p.x });
     this.quads.update((qs) => qs.map((q) => q.map(mapPt)));
     this.draft.update((ds) => ds.map(mapPt));
+    // renumber for the new orientation: the crop-order bubbles and the
+    // "photo i / n" counter always read top-left first, bottom-right last
+    const active = this.activeIdx() >= 0 ? this.quads()[this.activeIdx()] : null;
+    const ordered = readingOrder(this.quads(), rotated.height);
+    this.quads.set(ordered);
+    if (active) this.activeIdx.set(ordered.indexOf(active));
     // persist the rotation on the queue item and refresh its thumbnail
     const idx = this.currentIndex();
     if (this.images()[idx]) {
@@ -1078,12 +1234,15 @@ export class App {
     this.hostPan = null;
   }
 
-  protected clearCorners(): void {
+  /** Reset: drop every rectangle, then run the automatic detection afresh. */
+  protected resetRectangles(): void {
     this.quads.set([]);
     this.draft.set([]);
     this.drafting.set(false);
     this.activeIdx.set(-1);
-    this.redraw();
+    this.resetSnapLevel();
+    this.redraw(); // keep the canvas honest even when detection finds nothing
+    this.autoDetect();
   }
 
   private toImagePoint(ev: PointerEvent): Point {
@@ -1223,9 +1382,8 @@ export class App {
     if (!img) return;
     const host = this.canvasHost().nativeElement;
     const canvas = this.editCanvas().nativeElement;
-    const cw = host.clientWidth;
-    const ch = host.clientHeight;
-    if (!cw || !ch) return;
+    const { w: cw, h: ch } = hostContentSize(host);
+    if (cw <= 0 || ch <= 0) return;
     this.viewScale = Math.min(cw / img.width, ch / img.height) * this.zoom();
     const cssW = img.width * this.viewScale;
     const cssH = img.height * this.viewScale;
@@ -1253,6 +1411,22 @@ export class App {
     const active = this.activeIdx();
     const many = this.quads().length > 1; // a lone rectangle needs no number
     this.quads().forEach((q, i) => this.drawQuad(ctx, q, i === active, many ? i + 1 : 0));
+
+    // snap search-area flash: where "Correct boundaries" just looked (the
+    // radius is in image pixels — the snap runs at full resolution).
+    // Deliberately faint — a hint for the fijnproevers, not a spotlight.
+    if (this.snapFlash) {
+      const { centers, radius } = this.snapFlash;
+      ctx.setLineDash([3 / this.viewScale, 5 / this.viewScale]);
+      ctx.lineWidth = 1 / this.viewScale;
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)';
+      for (const c of centers) {
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, radius, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
 
     // in-progress draft corners
     const pts = this.draft();
@@ -1397,7 +1571,9 @@ export class App {
       }
 
       this.resultCount.set(this.results.length);
-      this.resultThumbs.set(this.results.map(resultThumb));
+      // explicit lambda: map would pass the index as resultThumb's height
+      this.resultThumbs.set(this.results.map((c) => resultThumb(c)));
+      this.resultStatus.set(this.results.map(() => 'pending'));
       this.resultIndex.set(0);
       this.mode.set('result');
       this.showResult(0);
@@ -1446,22 +1622,26 @@ export class App {
   }
 
   /**
-   * Save the current rectified PNG plus an XMP sidecar, then show the next
-   * rectangle's photo, or move to the next image after the last one.
+   * Save the current rectified photo as a high-quality JPEG (q 0.95) with
+   * the metadata embedded as real EXIF — DateTimeOriginal + timezone offset
+   * and ImageDescription; canvas encoders emit bare JPEGs, so embedExifJpeg
+   * splices the APP1 segment in — then show the next unsaved photo; the
+   * image is done only when every photo is saved or closed. Hand-entered
+   * metadata also lands in the scratchpad (deduped) and in the "use
+   * previous" memory, so it is reusable on later photos.
    */
   protected save(): void {
     const idx = this.resultIndex();
     const suffix = this.resultCount() > 1 ? `-${idx + 1}` : '';
-    this.resultCanvas().nativeElement.toBlob((blob) => {
-      if (!blob) {
-        alert('Could not encode the image.');
-        return;
-      }
-      downloadBlob(blob, `${this.baseName}-rectified${suffix}.png`);
-      const userDate = this.dateField() || null;
-      const description = this.descriptionField().trim() || null;
-      // no metadata entered at all -> no sidecar
-      if (userDate || description) {
+    const canvas = this.resultCanvas().nativeElement;
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          alert('Could not encode the image.');
+          return;
+        }
+        const userDate = this.dateField() || null;
+        const description = this.descriptionField().trim() || null;
         let date = userDate;
         let time: string | null = this.timeField();
         if (!date) {
@@ -1472,20 +1652,142 @@ export class App {
             time = exif.time;
           }
         }
-        const xmp = buildXmpSidecar({ date, time, description });
-        downloadBlob(
-          new Blob([xmp], { type: 'application/rdf+xml' }),
-          `${this.baseName}-rectified${suffix}.xmp`,
-        );
-      }
-      if (idx + 1 < this.resultCount()) {
-        this.resultIndex.set(idx + 1);
-        this.showResult(idx + 1);
-      } else {
-        this.markCurrent('saved');
-        this.advance();
-      }
-    }, 'image/png');
+        void (async () => {
+          let out = blob;
+          // no metadata entered at all -> plain JPEG, no EXIF
+          if (userDate || description) {
+            const jpeg = embedExifJpeg(new Uint8Array(await blob.arrayBuffer()), {
+              date,
+              time,
+              offset: date ? amsterdamOffset(date, time ?? DEFAULT_TIME) : null,
+              description,
+            });
+            out = new Blob([jpeg], { type: 'image/jpeg' });
+            if (
+              userDate &&
+              !this.scratchpad().some((e) => e.kind === 'date' && e.dateIso === userDate)
+            ) {
+              const [y, m, d] = userDate.split('-').map(Number);
+              this.addScratchEntry('date', new Date(y, m - 1, d));
+            }
+            if (
+              description &&
+              !this.scratchpad().some((e) => e.kind === 'description' && e.text === description)
+            ) {
+              this.addScratchEntry('description', description);
+            }
+            this.lastMeta.set({
+              date: this.dateField(),
+              time: this.timeField(),
+              description: this.descriptionField().trim(),
+            });
+          }
+          const name = `${this.baseName}${this.filenameSuffix()}${suffix}.jpg`;
+          if (this.downloadStyle() === 'zip') {
+            // collect for the batch ZIP, stamped with the photo's moment; a
+            // photo processed again joins under a higher number suffix
+            const entry: CollectedPhoto = {
+              name: this.uniqueZipName(name),
+              data: new Uint8Array(await out.arrayBuffer()),
+              mtime: date ? dateTimeToLocal(date, time ?? DEFAULT_TIME) : new Date(),
+              thumb: resultThumb(canvas, 140),
+            };
+            this.zipEntries.update((list) => [...list, entry]);
+          } else {
+            downloadBlob(out, name);
+          }
+          this.finishResult(idx, 'saved');
+        })();
+      },
+      'image/jpeg',
+      this.jpegQuality(),
+    );
+  }
+
+  /** First free name: the name itself, else stem-2.jpg, stem-3.jpg, … */
+  private uniqueZipName(name: string): string {
+    const taken = new Set(this.zipEntries().map((e) => e.name));
+    if (!taken.has(name)) return name;
+    const stem = name.replace(/\.jpg$/, '');
+    for (let k = 2; ; k++) {
+      const candidate = `${stem}-${k}.jpg`;
+      if (!taken.has(candidate)) return candidate;
+    }
+  }
+
+  /** Close the current preview photo without saving it. */
+  protected closeResult(): void {
+    this.finishResult(this.resultIndex(), 'closed');
+  }
+
+  /**
+   * Download every collected photo as one ZIP whose entries carry the photo
+   * dates as file dates — extraction restores them as the files' modified
+   * (and on APFS: creation) time, which per-file downloads cannot.
+   */
+  protected downloadZip(): void {
+    const entries = this.zipEntries();
+    if (!entries.length) return;
+    downloadBlob(
+      new Blob([buildZip(entries)], { type: 'application/zip' }),
+      'rectified-photos.zip',
+    );
+  }
+
+  /** The split button's right half: show the collected photos. */
+  protected openCollection(): void {
+    const mode = this.mode();
+    if (mode !== 'edit' && mode !== 'result') return;
+    this.returnMode = mode;
+    this.mode.set('collection');
+  }
+
+  protected backFromCollection(): void {
+    this.mode.set(this.returnMode);
+    requestAnimationFrame(() => {
+      if (this.mode() === 'edit') this.layoutEditCanvas();
+      else if (this.mode() === 'result') this.layoutResultCanvas();
+    });
+  }
+
+  protected removeCollected(name: string): void {
+    this.zipEntries.update((list) => list.filter((e) => e.name !== name));
+  }
+
+  protected onQuality(ev: Event): void {
+    this.jpegQuality.set(+(ev.target as HTMLInputElement).value);
+  }
+
+  protected onSuffix(ev: Event): void {
+    this.filenameSuffix.set(sanitizeSuffix((ev.target as HTMLInputElement).value));
+  }
+
+  /** Fill the metadata fields from the last save that carried input. */
+  protected usePrevious(): void {
+    const m = this.lastMeta();
+    if (!m || this.mode() !== 'result') return;
+    this.dateField.set(m.date);
+    this.timeField.set(m.time);
+    this.descriptionField.set(m.description);
+  }
+
+  /**
+   * Mark one rectified photo saved/closed, then show the next pending one
+   * (the last pending one when nothing follows the current photo). Only
+   * when none are pending the image is done and the queue advances.
+   */
+  private finishResult(idx: number, status: 'saved' | 'closed'): void {
+    const statuses = this.resultStatus().map((s, i) => (i === idx ? status : s));
+    this.resultStatus.set(statuses);
+    const after = statuses.findIndex((s, i) => i > idx && s === 'pending');
+    const next = after !== -1 ? after : statuses.lastIndexOf('pending');
+    if (next !== -1) {
+      this.resultIndex.set(next);
+      this.showResult(next);
+    } else {
+      this.markCurrent('saved');
+      this.advance();
+    }
   }
 
   /** Clear the whole batch and start over. */
@@ -1504,6 +1806,9 @@ export class App {
     this.results = [];
     this.resultCount.set(0);
     this.resultThumbs.set([]);
+    this.resultStatus.set([]);
+    this.lastMeta.set(null);
+    this.zipEntries.set([]);
     this.outSize.set(null);
     this.photoDate.set(null);
     this.dateField.set('');
@@ -1521,14 +1826,45 @@ function secondsToTime(total: number): string {
   return `${pad(Math.trunc(total / 3600) % 24)}:${pad(Math.trunc(total / 60) % 60)}:${pad(total % 60)}`;
 }
 
+/**
+ * A canvas host's content-box size. clientWidth/Height INCLUDE the host's
+ * padding, so fitting a canvas to them overflows by exactly the padding and
+ * summons scrollbars at zoom 1 — subtract it. (Zoom > 1 still overflows on
+ * purpose: that is what panning scrolls.)
+ */
+function hostContentSize(host: HTMLElement): { w: number; h: number } {
+  const cs = getComputedStyle(host);
+  return {
+    w: host.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+    h: host.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+  };
+}
+
 function toIsoDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Downscale a rectified photo to a strip-sized dataURL (JPEG keeps it small). */
-function resultThumb(src: HTMLCanvasElement): string {
-  const h = 64;
+/** An ISO date (YYYY-MM-DD) shifted by whole days; month/year roll over. */
+function addDaysIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return toIsoDate(new Date(y, m - 1, d + days));
+}
+
+/** Keep a filename suffix safe: no path separators or forbidden characters. */
+function sanitizeSuffix(raw: string): string {
+  return raw.replace(/[/\\:*?"<>|]/g, '').slice(0, 40);
+}
+
+/** ISO date + HH:MM[:SS] as a local-time Date. */
+function dateTimeToLocal(iso: string, time: string): Date {
+  const [y, m, d] = iso.split('-').map(Number);
+  const [hh = 12, mi = 0, ss = 0] = time.split(':').map(Number);
+  return new Date(y, m - 1, d, hh, mi, ss);
+}
+
+/** Downscale a rectified photo to a small dataURL (JPEG keeps it small). */
+function resultThumb(src: HTMLCanvasElement, h = 64): string {
   const w = Math.max(1, Math.round((src.width / src.height) * h));
   const c = document.createElement('canvas');
   c.width = w;

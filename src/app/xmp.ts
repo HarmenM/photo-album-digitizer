@@ -35,7 +35,7 @@ export function buildXmpSidecar(meta: PhotoMeta): string {
  </rdf:Description>`);
   }
   return `<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>
-<x:xmpmeta xmlns:x='adobe:ns:meta/' x:xmptk='photo-rectifier'>
+<x:xmpmeta xmlns:x='adobe:ns:meta/' x:xmptk='photo-album-digitizer'>
 <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
 
 ${blocks.join('\n\n')}
@@ -54,7 +54,7 @@ function normalizeTime(time: string | null | undefined): string {
 }
 
 /** Timezone offset of Europe/Amsterdam at the given moment (CET/CEST aware). */
-function amsterdamOffset(date: string, time: string): string {
+export function amsterdamOffset(date: string, time: string): string {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: 'Europe/Amsterdam',

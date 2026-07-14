@@ -43,12 +43,7 @@ export function detectPageCorners(img: ImageBitmap): Point[] | null {
  * page outline). With `guide` the valid quad that best overlaps it wins —
  * used to refine a coarse photo quad without latching onto a neighbor's edge.
  */
-function houghQuad(
-  rgba: Uint8ClampedArray,
-  w: number,
-  h: number,
-  guide?: Point[],
-): Point[] | null {
+function houghQuad(rgba: Uint8ClampedArray, w: number, h: number, guide?: Point[]): Point[] | null {
   const gray = new Float32Array(w * h);
   for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
     gray[i] = 0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2];
@@ -62,11 +57,19 @@ function houghQuad(
     for (let x = 1; x < w - 1; x++) {
       const i = y * w + x;
       const gx =
-        blur[i - w + 1] + 2 * blur[i + 1] + blur[i + w + 1] -
-        blur[i - w - 1] - 2 * blur[i - 1] - blur[i + w - 1];
+        blur[i - w + 1] +
+        2 * blur[i + 1] +
+        blur[i + w + 1] -
+        blur[i - w - 1] -
+        2 * blur[i - 1] -
+        blur[i + w - 1];
       const gy =
-        blur[i + w - 1] + 2 * blur[i + w] + blur[i + w + 1] -
-        blur[i - w - 1] - 2 * blur[i - w] - blur[i - w + 1];
+        blur[i + w - 1] +
+        2 * blur[i + w] +
+        blur[i + w + 1] -
+        blur[i - w - 1] -
+        2 * blur[i - w] -
+        blur[i - w + 1];
       mag[i] = Math.hypot(gx, gy);
       let ang = (Math.atan2(gy, gx) * 180) / Math.PI;
       if (ang < 0) ang += 180;
@@ -229,18 +232,53 @@ function quadIoU(a: Point[], b: Point[]): number {
 const MIN_PHOTO_FRACTION = 0.1; // a photo must cover at least 10% of the image
 const MAX_OVERLAP = 0.5; // drop a quad when more of it lies inside an accepted one
 // Photoshop-style threshold level: pixels darker than the level count as
-// "photo", brighter as page background. 0.6 is the default, validated on
-// real album pages with an actual Photoshop threshold layer; the caller can
-// pass a higher level (the D shortcut cycles 0.6→0.9) for pages whose light
-// photo content gets trimmed at 0.6. Auto-picking the level was tried and
-// reverted — no scoring rule survived contact with real pages.
-const DEFAULT_LUMA_LEVEL = 0.6;
+// "photo", brighter as page background. 0.6 was validated on real album
+// pages with an actual Photoshop threshold layer; higher levels keep light
+// photo content (sky, white borders) from being trimmed off the crop.
+//
+// Automatic level selection, take 3 (takes 1 and 2 — best score, and highest
+// count over all levels — mis-picked on real pages): CLIMB from 0.6 in 0.05
+// steps and keep the lowest step that explains the page — a higher step only
+// becomes the new best when it PROGRESSES vs the best step so far (more
+// rectangles resolved, or a matched rectangle growing ≥ 20% in area: real
+// photo content was being trimmed) without DEGRADING it (fewer rectangles —
+// photos merged; a previous rectangle no longer inside a new one — the blob
+// drifted or fragmented; or corner angles further from 90° — shear creeping
+// in). Both rules earned their keep on real pages:
+// - degraded steps are skipped, not stops: a blob absorbing bright photo
+//   content can pass through a transient non-rectangular shape (a real
+//   mostly-bright photo segmented wrong at 0.6, empty at 0.65 and right from
+//   0.7 up — its rectangle then grew 53%), so a higher level that again
+//   beats the best step resumes the climb;
+// - without the growth requirement the climb drifted to 0.9 on an already
+//   solid photo, where near-page-white shading crept into the blob (+6% per
+//   matched rectangle) and pushed the crop past the photo's edges;
+// - a step whose quad swallows (nearly) the whole region is the threshold
+//   FLOODING — no page background left to segment against — and is always
+//   degradation, however containing and rectangular the quad is (on a real
+//   page the flood step, 74% → 99%, sailed past the growth check as fake
+//   progress). A photo genuinely filling most of the frame stays under the
+//   fraction: its page margins, however slim, are real (a real one reached
+//   90%).
+const CLIMB_START = 0.6;
+const CLIMB_STEP = 0.05;
+const CLIMB_MAX = 0.9; // above this everything floods together
+const CLIMB_CONTAIN_FRACTION = 0.9; // "inside": ≥ 90% of the old quad's area covered
+const CLIMB_ANGLE_SLACK_DEG = 1; // ignore sub-degree angle jitter between steps
+const CLIMB_GROWTH_MIN = 1.2; // growth below this is shading/morphology creep, not content
+const CLIMB_FLOOD_FRACTION = 0.97; // a quad this big IS the region: the threshold flooded
 const DILATE_PASSES = 2; // closes cracks and small holes before hole-filling
 const ERODE_PASSES = 5; // net shrink after dilation separates touching photos
 const NET_SHRINK = ERODE_PASSES - DILATE_PASSES; // per-side shrink to grow back
 const MAX_SPLIT_ERODES = 4; // extra per-component erosions to break bridged blobs
 const MAX_ASPECT = 3.5; // longest/shortest quad side; photos are never strips
-const PAGE_FRACTION = 0.55; // a lone quad this big is the album page, not a photo
+const PAGE_FRACTION = 0.55; // a lone quad this big may be the album page, not a photo
+// …but only when what surrounds it is mostly dark (the table the page lies
+// on). A frame-filling photo is also a lone dominant quad, yet its surround
+// is the bright page: on real pages the photo surrounds measured 1–23%
+// dark (white page plus a dark table sliver at the frame edge), a table
+// surround is nearly all dark.
+const PAGE_SURROUND_DARK = 0.4;
 // A photographed rectangle's corners stay close to 90°: the mild perspective
 // of a handheld page shot bends them only a few degrees. 12° accepts that
 // (plus diagonal-extremes fit slop) while rejecting sheared blobs — shadows,
@@ -253,7 +291,9 @@ const MAX_CORNER_DEV_DEG = 12;
  * roughly in reading order; empty when nothing plausible is found.
  *
  * Pipeline per region: threshold on luminance (photos are darker than the
- * page, like a Photoshop threshold layer at `level`) -> close cracks and fill
+ * page, like a Photoshop threshold layer at `level` — or, without a level,
+ * the automatic climb described at the CLIMB_* constants) -> close cracks
+ * and fill
  * photo-internal holes -> erode (splits touching photos) -> connected
  * components -> fit a quad to each component via its diagonal extremes ->
  * keep only rectangul-ish quads covering >= 10% of the image whose corners
@@ -276,7 +316,7 @@ const MAX_CORNER_DEV_DEG = 12;
  * (perspective-morphed is fine, heavily rotated is not) — rotate the page
  * first for those.
  */
-export function detectPhotoRects(img: ImageBitmap, level = DEFAULT_LUMA_LEVEL): Point[][] {
+export function detectPhotoRects(img: ImageBitmap, level?: number): Point[][] {
   const MAX_DIM = 600;
   const scale = Math.min(1, MAX_DIM / Math.max(img.width, img.height));
   const w = Math.max(8, Math.round(img.width * scale));
@@ -290,12 +330,24 @@ export function detectPhotoRects(img: ImageBitmap, level = DEFAULT_LUMA_LEVEL): 
   const rgba = ctx.getImageData(0, 0, w, h).data;
 
   const minQuadArea = MIN_PHOTO_FRACTION * w * h;
-  const threshold = level * 255;
-  let quads = detectInRegion(rgba, w, 0, 0, w, h, minQuadArea, threshold);
+  const outer = detectInRegion(rgba, w, 0, 0, w, h, minQuadArea, level);
+  let quads = outer.quads;
 
-  // A single dominant quad is the album page itself, not a photo — run the
-  // detection again inside it, so the page interior becomes the background.
-  if (quads.length === 1 && polyArea(quads[0]) >= PAGE_FRACTION * w * h) {
+  // A single dominant quad is either the album page itself (page on a dark
+  // table) or a photo filling most of the frame on a bright page. Decide by
+  // what lies OUTSIDE the quad at the level that produced it: only a mostly
+  // dark surround marks the page — then rerun the detection inside it, so
+  // the page interior becomes the background. A photo's surround is the
+  // bright page, and rerunning inside a photo would trade the correct crop
+  // for whatever its content happens to segment into.
+  const surround =
+    quads.length === 1 && polyArea(quads[0]) >= PAGE_FRACTION * w * h
+      ? darkFractionOutside(rgba, w, h, quads[0], outer.level)
+      : null;
+  if (surround !== null) {
+    console.debug(`dominant quad — surround ${Math.round(surround * 100)}% dark`);
+  }
+  if (surround !== null && surround >= PAGE_SURROUND_DARK) {
     const xs = quads[0].map((p) => p.x);
     const ys = quads[0].map((p) => p.y);
     const inset = Math.max(3, Math.round(0.01 * Math.min(w, h)));
@@ -304,12 +356,12 @@ export function detectPhotoRects(img: ImageBitmap, level = DEFAULT_LUMA_LEVEL): 
     const x1 = Math.min(w, Math.round(Math.max(...xs)) - inset);
     const y1 = Math.min(h, Math.round(Math.max(...ys)) - inset);
     if (x1 - x0 > 20 && y1 - y0 > 20) {
-      const inner = detectInRegion(rgba, w, x0, y0, x1, y1, minQuadArea, threshold);
+      const inner = detectInRegion(rgba, w, x0, y0, x1, y1, minQuadArea, level).quads;
       if (inner.length) quads = inner;
     }
   }
 
-  console.debug(`detectPhotoRects @${level.toFixed(2)}: ${quads.length} quad(s)`);
+  console.debug(`detectPhotoRects @${level?.toFixed(2) ?? 'auto'}: ${quads.length} quad(s)`);
 
   // segmentation discovered the photos; the Hough line fit nails their edges
   const sx = img.width / w;
@@ -325,11 +377,48 @@ function clampPt(p: Point, w: number, h: number): Point {
 }
 
 /**
+ * Fraction of the pixels outside the quad's bounding box that are darker
+ * than the given threshold level. Returns 0 when almost nothing lies
+ * outside — too small a sample to call the surround dark.
+ */
+function darkFractionOutside(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  quad: Point[],
+  level: number,
+): number {
+  const xs = quad.map((p) => p.x);
+  const ys = quad.map((p) => p.y);
+  const x0 = Math.max(0, Math.round(Math.min(...xs)));
+  const y0 = Math.max(0, Math.round(Math.min(...ys)));
+  const x1 = Math.min(w, Math.round(Math.max(...xs)));
+  const y1 = Math.min(h, Math.round(Math.max(...ys)));
+  const thr = level * 255;
+  let dark = 0;
+  let total = 0;
+  for (let y = 0; y < h; y++) {
+    const inRow = y >= y0 && y < y1;
+    for (let x = 0; x < w; x++) {
+      if (inRow && x >= x0 && x < x1) continue;
+      const p = (y * w + x) * 4;
+      const luma = 0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2];
+      total++;
+      if (luma < thr) dark++;
+    }
+  }
+  return total >= 0.03 * w * h ? dark / total : 0;
+}
+
+/**
  * Re-fit one coarse photo quad precisely: crop the photo plus a small margin
  * from the full-resolution image and run the Hough quad fit on the crop,
  * keeping the candidate that best overlaps the coarse quad. Returns null
- * when no fit agrees with the coarse quad (IoU < 0.6) — then the coarse
- * quad itself is the best we have.
+ * when no fit agrees with the coarse quad (IoU < 0.8) — then the coarse
+ * quad itself is the best we have. A true refit only nudges edges by a few
+ * percent; a lower IoU means the fit collapsed onto strong lines INSIDE the
+ * photo because the real edge is too soft to peak (a pale path against the
+ * white page cost a real photo a third of its width at the old 0.6 bar).
  */
 function houghRefit(img: ImageBitmap, quad: Point[]): Point[] | null {
   const xs = quad.map((p) => p.x);
@@ -357,12 +446,17 @@ function houghRefit(img: ImageBitmap, quad: Point[]): Point[] | null {
   const out = local.map((p) =>
     clampPt({ x: x0 + p.x / scale, y: y0 + p.y / scale }, img.width, img.height),
   );
-  return quadIoU(sortCorners(out), sortCorners(quad)) >= 0.6 ? out : null;
+  return quadIoU(sortCorners(out), sortCorners(quad)) >= 0.8 ? out : null;
 }
 
 /**
- * One masking + component pass over a region of the downscaled image.
- * Returns accepted photo quads in downscaled image coordinates, reading order.
+ * Masking + component pass over a region of the downscaled image. With an
+ * explicit `level` it is a single pass at that threshold; without one it
+ * CLIMBS: segment at 0.6, then repeatedly 0.05 higher, skipping degraded
+ * steps, and keep the lowest step that no higher step genuinely improved on
+ * (see climbDegradation, climbProgress and the CLIMB_* comment).
+ * Returns accepted photo quads in downscaled image coordinates, reading
+ * order, plus the threshold level that produced them.
  */
 function detectInRegion(
   rgba: Uint8ClampedArray,
@@ -372,8 +466,8 @@ function detectInRegion(
   rx1: number,
   ry1: number,
   minQuadArea: number,
-  threshold: number,
-): Point[][] {
+  level?: number,
+): { quads: Point[][]; level: number } {
   const w = rx1 - rx0;
   const h = ry1 - ry0;
 
@@ -384,12 +478,101 @@ function detectInRegion(
     crop.set(rgba.subarray(src, src + w * 4), y * w * 4);
   }
 
-  // luminance threshold, blurred so photo edges stay closed
+  // luminance, blurred so photo edges stay closed — shared by climb steps
   const luma = new Float32Array(w * h);
   for (let i = 0, p = 0; i < luma.length; i++, p += 4) {
     luma[i] = 0.299 * crop[p] + 0.587 * crop[p + 1] + 0.114 * crop[p + 2];
   }
   const blurred = gaussianBlur5(luma, w, h);
+  const segment = (lv: number) => segmentAt(blurred, w, h, lv * 255, minQuadArea);
+
+  let winner: Point[][];
+  let winnerLevel: number;
+  if (level !== undefined) {
+    winner = segment(level);
+    winnerLevel = level;
+  } else {
+    let best = segment(CLIMB_START);
+    let bestLevel = CLIMB_START;
+    const pct = (quads: Point[][]) =>
+      Math.round(quads.reduce((a, q) => a + polyArea(q), 0) / (w * h) / 0.01);
+    const steps = [`${CLIMB_START.toFixed(2)}: ${best.length}(${pct(best)}%)`];
+    for (let lv = CLIMB_START + CLIMB_STEP; lv <= CLIMB_MAX + 1e-9; lv += CLIMB_STEP) {
+      const next = segment(lv);
+      const flooded = next.some((q) => polyArea(q) >= CLIMB_FLOOD_FRACTION * w * h);
+      const worse = flooded ? 'flooded' : climbDegradation(best, next);
+      const better = !worse && climbProgress(best, next);
+      steps.push(
+        `${lv.toFixed(2)}: ${next.length}(${pct(next)}%)${worse ? ` ✗ ${worse}` : better ? '' : ' ·'}`,
+      );
+      if (better) {
+        best = next;
+        bestLevel = lv;
+      }
+    }
+    console.debug(
+      `detectInRegion ${w}×${h} @(${rx0},${ry0}) — ${steps.join(' | ')} → level ${bestLevel.toFixed(2)}`,
+    );
+    winner = best;
+    winnerLevel = bestLevel;
+  }
+  return {
+    quads: winner.map((quad) => quad.map((p) => ({ x: p.x + rx0, y: p.y + ry0 }))),
+    level: winnerLevel,
+  };
+}
+
+/**
+ * Is the climb step `next` a degradation of the best step `prev`? Returns
+ * the reason (the step is skipped and `prev` kept), or null. The three
+ * degradations: fewer rectangles (photos merged), a previous rectangle no
+ * longer inside a new one (the blob drifted or fragmented), or a matched
+ * rectangle's corners further from 90° than before (shear creeping in).
+ */
+function climbDegradation(prev: Point[][], next: Point[][]): string | null {
+  if (next.length < prev.length) return 'fewer rectangles';
+  for (const p of prev) {
+    const inside = next.find(
+      (n) => polyArea(clipPoly(p, n)) >= CLIMB_CONTAIN_FRACTION * polyArea(p),
+    );
+    if (!inside) return 'lost a rectangle';
+    const prevDev = maxCornerAngleDev(p as [Point, Point, Point, Point]);
+    const nextDev = maxCornerAngleDev(inside as [Point, Point, Point, Point]);
+    if (nextDev > prevDev + CLIMB_ANGLE_SLACK_DEG) return 'angles degraded';
+  }
+  return null;
+}
+
+/**
+ * Does the (non-degraded) climb step `next` actually improve on the best
+ * step `prev`? Progress is more rectangles resolved, or a matched rectangle
+ * growing by ≥ CLIMB_GROWTH_MIN (photo content that the lower threshold
+ * trimmed off). Anything less — the same rectangles a few percent fatter —
+ * is page shading and morphology creep, and keeping the lower level is what
+ * stops the crop drifting past the photo's edges.
+ */
+function climbProgress(prev: Point[][], next: Point[][]): boolean {
+  if (next.length > prev.length) return true;
+  for (const p of prev) {
+    const inside = next.find(
+      (n) => polyArea(clipPoly(p, n)) >= CLIMB_CONTAIN_FRACTION * polyArea(p),
+    );
+    if (inside && polyArea(inside) >= CLIMB_GROWTH_MIN * polyArea(p)) return true;
+  }
+  return false;
+}
+
+/**
+ * One masking + component pass at one threshold (0–255 scale). Returns
+ * accepted photo quads in local region coordinates, reading order.
+ */
+function segmentAt(
+  blurred: Float32Array,
+  w: number,
+  h: number,
+  threshold: number,
+  minQuadArea: number,
+): Point[][] {
   let mask = new Uint8Array(w * h);
   for (let i = 0; i < mask.length; i++) mask[i] = blurred[i] < threshold ? 1 : 0;
   // close cracks, then solidify photos whose bright content matches the page
@@ -479,20 +662,31 @@ function detectInRegion(
     if (!overlapped) accepted.push(c);
   }
 
-  // reading order: by row band, then left to right
+  return readingOrder(
+    accepted.map(({ quad }) => quad),
+    h,
+  );
+}
+
+/**
+ * Sort quads into reading order — by row band (a quarter of the region
+ * height), then left to right — the order the crop-number bubbles and the
+ * "photo i / n" counter present them in. Also used to renumber after a
+ * rotation, so the numbering always reads top-left first in the current
+ * orientation.
+ */
+export function readingOrder(quads: Point[][], regionH: number): Point[][] {
   const center = (q: Point[]) => ({
     x: (q[0].x + q[1].x + q[2].x + q[3].x) / 4,
     y: (q[0].y + q[1].y + q[2].y + q[3].y) / 4,
   });
-  const band = h * 0.25;
-  accepted.sort((a, b) => {
-    const ca = center(a.quad);
-    const cb = center(b.quad);
+  const band = regionH * 0.25;
+  return quads.slice().sort((a, b) => {
+    const ca = center(a);
+    const cb = center(b);
     const rowDiff = Math.floor(ca.y / band) - Math.floor(cb.y / band);
     return rowDiff || ca.x - cb.x;
   });
-
-  return accepted.map(({ quad }) => quad.map((p) => ({ x: p.x + rx0, y: p.y + ry0 })));
 }
 
 interface Component {
@@ -690,35 +884,64 @@ function clipPoly(subject: Point[], clip: Point[]): Point[] {
   return out;
 }
 
-const SNAP_RADIUS = 25; // half of the 50 px search box around each corner
+export const SNAP_RADIUS = 25; // half of the default 50 px search box around each corner
 const SNAP_SEG_MIN = 6; // sample the edge from here (skips the messy corner junction)…
 const SNAP_SEG_MAX = 42; // …to here, in px along the edge away from the corner
 const SNAP_MIN_CONTRAST = 12; // mean gray-level step required to accept a snap
+const SNAP_PASSES = 4; // re-snap until the corners settle…
+const SNAP_SETTLED_PX = 0.75; // …moving less than this between passes
 
 /**
- * Snap a quad's corners onto the photo's actual boundary.
- *
- * Only a 50 px box around each corner is searched. The boundary is assumed to
- * be a hard contrast change (photo against a light background), so each of
- * the corner's two adjacent quad edges is slid along its own normal to the
- * offset with the strongest mean contrast across the line; the snapped corner
- * is the intersection of the two shifted lines. Runs at full image
- * resolution. Returns the corners in the order they were passed in; a corner
- * with no decisive contrast edge nearby stays where it is.
+ * Snap a quad's corners onto the photo's actual boundary, in multiple passes:
+ * each pass re-centers the search on the previous result, so a corner can
+ * work its way to an edge slightly beyond a single pass's reach, and the
+ * corner intersections settle after their edges moved. Every pass still
+ * requires a decisive contrast edge, so featureless surroundings stop the
+ * walk immediately; the pass cap bounds total travel to
+ * SNAP_PASSES × radius. Returns the corners in the order they were
+ * passed in; a corner with no decisive contrast edge nearby stays where it
+ * is. `radius` widens the per-pass search box (the "Correct boundaries"
+ * button escalates it on repeated presses).
  */
-export function snapCornersToEdges(img: ImageBitmap, corners: Point[]): Point[] {
+export function snapCornersToEdges(
+  img: ImageBitmap,
+  corners: Point[],
+  radius = SNAP_RADIUS,
+): Point[] {
+  let cur = corners;
+  for (let pass = 0; pass < SNAP_PASSES; pass++) {
+    const next = snapCornersOnce(img, cur, radius);
+    const moved = Math.max(...next.map((p, i) => Math.hypot(p.x - cur[i].x, p.y - cur[i].y)));
+    cur = next;
+    if (moved < SNAP_SETTLED_PX) break;
+  }
+  return cur;
+}
+
+/**
+ * One snap pass. Only a ±radius box around each corner is searched. The
+ * boundary is assumed to be a hard contrast change (photo against a light
+ * background), so each of the corner's two adjacent quad edges is slid along
+ * its own normal to the offset with the strongest mean contrast across the
+ * line; the snapped corner is the intersection of the two shifted lines.
+ * Runs at full image resolution.
+ */
+function snapCornersOnce(img: ImageBitmap, corners: Point[], radius: number): Point[] {
   if (corners.length !== 4) return corners.slice();
   const sorted = sortCorners(corners);
   const snapped = new Map<Point, Point>();
   for (let i = 0; i < 4; i++) {
-    snapped.set(sorted[i], snapCorner(img, sorted[i], sorted[(i + 3) % 4], sorted[(i + 1) % 4]));
+    snapped.set(
+      sorted[i],
+      snapCorner(img, sorted[i], sorted[(i + 3) % 4], sorted[(i + 1) % 4], radius),
+    );
   }
   return corners.map((p) => snapped.get(p) ?? p);
 }
 
-function snapCorner(img: ImageBitmap, p: Point, prev: Point, next: Point): Point {
+function snapCorner(img: ImageBitmap, p: Point, prev: Point, next: Point, radius: number): Point {
   // patch big enough for the search box plus the sampled edge stretch
-  const H = SNAP_RADIUS + SNAP_SEG_MAX + 3;
+  const H = radius + SNAP_SEG_MAX + 3;
   const S = 2 * H + 1;
   const sx = Math.round(p.x) - H;
   const sy = Math.round(p.y) - H;
@@ -761,7 +984,7 @@ function snapCorner(img: ImageBitmap, p: Point, prev: Point, next: Point): Point
   const edgeOffset = (u: Point, n: Point): number => {
     let bestD = 0;
     let bestScore = -Infinity;
-    for (let d = -SNAP_RADIUS; d <= SNAP_RADIUS; d++) {
+    for (let d = -radius; d <= radius; d++) {
       let sum = 0;
       let cnt = 0;
       for (let s = SNAP_SEG_MIN; s <= SNAP_SEG_MAX; s += 2) {
@@ -806,9 +1029,9 @@ function snapCorner(img: ImageBitmap, p: Point, prev: Point, next: Point): Point
   const by = p.y + dB * nB.y;
   const t = ((bx - ax) * uB.y - (by - ay) * uB.x) / det;
   const out = { x: ax + t * uA.x, y: ay + t * uA.y };
-  // stay inside the 50 px search box (shallow edge angles can fling the
+  // stay inside the search box (shallow edge angles can fling the
   // intersection far away)
-  if (Math.abs(out.x - p.x) > SNAP_RADIUS || Math.abs(out.y - p.y) > SNAP_RADIUS) return p;
+  if (Math.abs(out.x - p.x) > radius || Math.abs(out.y - p.y) > radius) return p;
   return out;
 }
 

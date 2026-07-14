@@ -7,7 +7,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "photo-rectifier": {
+    "photo-album-digitizer": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:class": {
@@ -80,10 +80,10 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "photo-rectifier:build:production"
+              "buildTarget": "photo-album-digitizer:build:production"
             },
             "development": {
-              "buildTarget": "photo-rectifier:build:development"
+              "buildTarget": "photo-album-digitizer:build:development"
             }
           },
           "defaultConfiguration": "development"

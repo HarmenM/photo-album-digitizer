@@ -11,7 +11,7 @@
 - Prefer verifying visually/behaviorally: many features are canvas drawing
   (corner dots, midpoint grips, loupe) that unit tests can't see. Screenshots
   from a driven browser are the reliable signal.
-- The pure modules (`corner-detect.ts`, `homography.ts`, `exif.ts`, `xmp.ts`)
-  are the right place for unit tests — they need no DOM.
+- The pure modules (`corner-detect.ts`, `homography.ts`, `exif.ts`, `xmp.ts`,
+  `zip.ts`) are the right place for unit tests — they need no DOM.
 - Manual smoke test: `npm start`, drop a photo, check auto-detected corners,
   drag one (loupe should appear, crosshair centered), Apply, fill date, Save.

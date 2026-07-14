@@ -1,59 +1,76 @@
-# PhotoRectifier
+# Photo Album Digitizer
+## Why this? And how I use it myself
+I have a whole stack of photo albums I wanted to digitize. The albums hold
+several photos per page, with descriptions and dates written next to them. I
+photographed every page, and sometimes individual photos as well. This tool
+makes sure each photo is cut out neatly, and that its metadata is set right
+efficiently: a photo taken in the eighties should carry a date stamp
+from the eighties. With the scratchpad I can quickly store the dates and
+descriptions written in the album, and later click them together while
+processing the individual photos.
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.0.6.
+Digitize old photo albums with nothing but a camera and a browser. Photograph
+your album pages, drop the shots into the app, and it finds every photo on the
+page, straightens it, and saves it as a high-quality JPEG with the date and
+description embedded as real EXIF metadata. Everything runs locally in the
+browser — your photos never leave your machine.
 
-## Development server
+## Features
 
-To start a local development server, run:
+- **Batch queue** — drop a whole folder of page shots at once; a thumbnail
+  drawer tracks progress with saved-checkmarks and per-page photo counts.
+- **Automatic photo detection** — finds every photo on an album page
+  (adaptive luminance threshold, Hough line refit, contrast-edge snapping),
+  with a Reset button to re-run it after manual changes.
+- **Precise corner editing** — draggable corners with a full-resolution
+  magnifier loupe, midpoint grips to slide whole edges, manual marking for
+  photos the detection missed, and progressive boundary correction (`C`)
+  that widens its search area on repeated presses (L, XL).
+- **Perspective correction** — photos shot at an angle come out perfectly
+  flat and rectangular, without losing any sharpness from the original
+  shot; rotate pages in quarter turns and the photo numbering follows
+  automatically.
+- **Per-photo metadata** — date, time, and description per photo; an
+  always-visible scratchpad collects dates/descriptions from context pages
+  and offers them as one-click chips voice dictation for
+  descriptions (Chrome).
+- **EXIF-embedded JPEG export** — `DateTimeOriginal` (with CET/CEST
+  timezone offset) and the description are embedded in the file itself; JPG
+  quality and the filename suffix are configurable in the settings.
+- **Two download styles** — direct download per save, or collect everything
+  into one ZIP whose files carry the photo dates as file dates after
+  extraction (with a reviewable, removable collection page).
+- **Keyboard-first** — every action has a shortcut (see the table below),
+  and every shortcut is shown in its button's tooltip.
+
+## Keyboard shortcuts
+
+| Key | Where | Action |
+| --- | --- | --- |
+| `R` / `L` | editor & preview | Rotate 90° right / left |
+| `C` | editor | Correct boundaries of the active rectangle — press again within 2 s to widen the search area (L, then XL) |
+| `S` | editor | Shrink the active rectangle 10 px inward |
+| `Delete` / `Backspace` | editor | Cancel the rectangle being marked, or else delete the active rectangle |
+| `Esc` | editor | Cancel the rectangle being marked |
+| `←` / `→` | editor | Previous / next image in the queue |
+| `←` / `→` | preview | Previous / next rectified photo |
+| `Alt/⌘ + Enter` | editor & preview | Confirm the current step: Apply, or Save & next (also works while typing) |
+| `Esc` / `Backspace` / browser Back | preview | Back to the corner editor (in an input, the first `Esc` leaves the field, the second leaves the screen) |
+| `Esc` | settings / ZIP collection | Close the dialog / go back |
+| `Ctrl/⌘ + +` / `−` / `0` | editor & preview | Zoom in / out / reset (trackpad pinch zooms too; plain scrolling pans) |
+
+## Development
 
 ```bash
-ng serve
+npm start        # dev server on http://localhost:4200
+npm run build    # production build into dist/photo-album-digitizer
+npm test         # unit tests
 ```
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+Built with Angular (zoneless, signals) and no image or metadata libraries —
+the photo detection, perspective warp, EXIF writing, and ZIP packing are
+hand-rolled pure TypeScript modules in `src/app/`.
 
-## Code scaffolding
+## License
 
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
-
-```bash
-ng generate component component-name
-```
-
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
-
-```bash
-ng generate --help
-```
-
-## Building
-
-To build the project run:
-
-```bash
-ng build
-```
-
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
-
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
-
-```bash
-ng test
-```
-
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+[MIT](LICENSE)

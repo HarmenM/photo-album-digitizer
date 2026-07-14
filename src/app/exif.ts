@@ -1,9 +1,25 @@
 const MONTHS: Record<string, number> = {
-  january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
-  july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
+  january: 1,
+  february: 2,
+  march: 3,
+  april: 4,
+  may: 5,
+  june: 6,
+  july: 7,
+  august: 8,
+  september: 9,
+  october: 10,
+  november: 11,
+  december: 12,
   // Dutch
-  januari: 1, februari: 2, maart: 3, mei: 5, juni: 6,
-  juli: 7, augustus: 8, oktober: 10,
+  januari: 1,
+  februari: 2,
+  maart: 3,
+  mei: 5,
+  juni: 6,
+  juli: 7,
+  augustus: 8,
+  oktober: 10,
 };
 
 /**
@@ -121,4 +137,132 @@ function parseTiff(view: DataView, base: number): Date | null {
   const [, y, mo, d, h = '12', mi = '0', s = '0'] = m;
   const date = new Date(+y, +mo - 1, +d, +h, +mi, +s);
   return isNaN(date.getTime()) ? null : date;
+}
+
+// --- EXIF writer: the mirror of the reader above --------------------------
+
+export interface ExifMeta {
+  /** ISO date, YYYY-MM-DD */
+  date: string | null;
+  /** time of day, HH:MM or HH:MM:SS; defaults to 12:00:00 */
+  time?: string | null;
+  /** timezone offset for the date, ±HH:MM (written as OffsetTimeOriginal) */
+  offset?: string | null;
+  description?: string | null;
+}
+
+const TIFF_ASCII = 2;
+const TIFF_LONG = 4;
+
+interface IfdEntry {
+  tag: number;
+  type: number;
+  count: number;
+  data: Uint8Array; // raw value bytes; > 4 bytes moves to the value area
+}
+
+/**
+ * Splice an EXIF APP1 segment into a bare JPEG (canvas.toBlob output carries
+ * no metadata at all), directly after the SOI marker. Writes
+ * DateTimeOriginal + OffsetTimeOriginal into the Exif sub-IFD and
+ * ImageDescription into IFD0. The description is UTF-8 — the EXIF spec says
+ * ASCII, but UTF-8 is the de-facto convention exiftool and the major photo
+ * apps read. Returns the input unchanged when there is nothing to write or
+ * the buffer is not a JPEG.
+ */
+export function embedExifJpeg(
+  jpeg: Uint8Array<ArrayBuffer>,
+  meta: ExifMeta,
+): Uint8Array<ArrayBuffer> {
+  if (!meta.date && !meta.description) return jpeg;
+  if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return jpeg;
+  const app1 = buildExifApp1(meta);
+  const out = new Uint8Array(jpeg.length + app1.length);
+  out.set(jpeg.subarray(0, 2));
+  out.set(app1, 2);
+  out.set(jpeg.subarray(2), 2 + app1.length);
+  return out;
+}
+
+/** NUL-terminated ASCII/UTF-8 TIFF value. */
+function asciiBytes(text: string): Uint8Array {
+  const raw = new TextEncoder().encode(text);
+  const data = new Uint8Array(raw.length + 1); // trailing NUL
+  data.set(raw);
+  return data;
+}
+
+function buildExifApp1(meta: ExifMeta): Uint8Array {
+  const ifd0: IfdEntry[] = [];
+  const exifIfd: IfdEntry[] = [];
+  if (meta.description) {
+    const data = asciiBytes(meta.description);
+    ifd0.push({ tag: 0x010e, type: TIFF_ASCII, count: data.length, data });
+  }
+  if (meta.date) {
+    const time =
+      meta.time && /^\d{2}:\d{2}(:\d{2})?$/.test(meta.time)
+        ? meta.time.length === 5
+          ? `${meta.time}:00`
+          : meta.time
+        : '12:00:00';
+    const dt = asciiBytes(`${meta.date.replace(/-/g, ':')} ${time}`);
+    exifIfd.push({ tag: 0x9003, type: TIFF_ASCII, count: dt.length, data: dt });
+    if (meta.offset && /^[+-]\d{2}:\d{2}$/.test(meta.offset)) {
+      const off = asciiBytes(meta.offset);
+      exifIfd.push({ tag: 0x9011, type: TIFF_ASCII, count: off.length, data: off });
+    }
+  }
+  // pointer to the Exif sub-IFD; its value is filled in after the layout
+  const exifPtr: IfdEntry | null = exifIfd.length
+    ? { tag: 0x8769, type: TIFF_LONG, count: 1, data: new Uint8Array(4) }
+    : null;
+  if (exifPtr) ifd0.push(exifPtr);
+  ifd0.sort((a, b) => a.tag - b.tag); // IFD entries must be tag-ordered
+
+  // layout, all offsets relative to the TIFF header: header (8) -> IFD0 ->
+  // Exif IFD -> value area for entries wider than the 4 inline bytes
+  const ifdSize = (n: number) => 2 + n * 12 + 4;
+  const exifIfdOffset = 8 + ifdSize(ifd0.length);
+  const valueStart = exifIfdOffset + (exifIfd.length ? ifdSize(exifIfd.length) : 0);
+  if (exifPtr) new DataView(exifPtr.data.buffer).setUint32(0, exifIfdOffset);
+  const valueOffsets = new Map<IfdEntry, number>();
+  let valueEnd = valueStart;
+  for (const e of [...ifd0, ...exifIfd]) {
+    if (e.data.length > 4) {
+      valueOffsets.set(e, valueEnd);
+      valueEnd += e.data.length + (e.data.length & 1); // keep offsets even
+    }
+  }
+
+  const tiff = new Uint8Array(valueEnd);
+  const view = new DataView(tiff.buffer);
+  tiff.set([0x4d, 0x4d, 0x00, 0x2a]); // "MM", big-endian TIFF
+  view.setUint32(4, 8); // IFD0 offset
+  const writeIfd = (entries: IfdEntry[], at: number) => {
+    view.setUint16(at, entries.length);
+    let p = at + 2;
+    for (const e of entries) {
+      view.setUint16(p, e.tag);
+      view.setUint16(p + 2, e.type);
+      view.setUint32(p + 4, e.count);
+      if (e.data.length > 4) view.setUint32(p + 8, valueOffsets.get(e)!);
+      else tiff.set(e.data, p + 8); // inline, zero-padded
+      p += 12;
+    }
+    view.setUint32(p, 0); // no next IFD
+  };
+  writeIfd(ifd0, 8);
+  if (exifIfd.length) writeIfd(exifIfd, exifIfdOffset);
+  for (const [e, off] of valueOffsets) tiff.set(e.data, off);
+
+  // wrap as an APP1 segment: FF E1, length (excl. marker), "Exif\0\0", TIFF
+  const seg = new Uint8Array(4 + 6 + tiff.length);
+  const segView = new DataView(seg.buffer);
+  seg[0] = 0xff;
+  seg[1] = 0xe1;
+  segView.setUint16(2, seg.length - 2);
+  seg.set([0x45, 0x78, 0x69, 0x66, 0, 0], 4); // "Exif\0\0"
+  seg.set(tiff, 10);
+  return seg;
 }

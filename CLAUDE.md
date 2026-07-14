@@ -1,4 +1,4 @@
-# Photo Rectifier
+# Photo Album Digitizer
 
 Project rules live in `.claude/rules/`. The product intent is the **main
 guideline** — read it first; everything else is subordinate to it:

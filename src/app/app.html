@@ -44,7 +44,7 @@
     <!-- start screen -->
     <section class="screen" [style.display]="mode() === 'idle' ? '' : 'none'">
       <div class="dropzone" [class.active]="dragOver()" (click)="fileInput.click()">
-        <h1>Photo Rectifier</h1>
+        <h1>Photo Album Digitizer</h1>
         <p class="big">Drop your JPG photos anywhere on this tab</p>
         <p class="muted">or click here to browse — you can add a whole batch</p>
       </div>
@@ -58,45 +58,45 @@
       <div class="toolbar">
         <span class="hint">{{ hint() }}</span>
         <button
-          (click)="autoDetect()"
+          class="icon-only"
+          (click)="rotate(-1)"
           [disabled]="mode() === 'processing'"
-          title="Automatically detect the photos — press again within 2 s to retry at a higher threshold: 0.6 → 0.7 → 0.8 → 0.9 (shortcut: D)"
+          title="Rotate 90° left (shortcut: L)"
         >
-          <span class="material-symbols-outlined">auto_awesome</span> Detect photos
+          <span class="material-symbols-outlined">rotate_left</span>
         </button>
+        <button
+          class="icon-only"
+          (click)="rotate(1)"
+          [disabled]="mode() === 'processing'"
+          title="Rotate 90° right (shortcut: R)"
+        >
+          <span class="material-symbols-outlined">rotate_right</span>
+        </button>
+        <span class="divider"></span>
         <button
           (click)="toggleDraft()"
           [class.active]="drafting()"
           [disabled]="mode() === 'processing'"
           [title]="
             drafting()
-              ? 'Cancel adding the photo (shortcut: Esc)'
-              : 'Add a photo by clicking its four corners'
+              ? 'Cancel marking the photo (shortcut: Esc)'
+              : 'Mark a photo by clicking its four corners'
           "
         >
-          <span class="material-symbols-outlined">add_box</span> Add photo
-        </button>
-        <button
-          (click)="rotate(-1)"
-          [disabled]="mode() === 'processing'"
-          title="Rotate 90° left (shortcut: L)"
-        >
-          <span class="material-symbols-outlined">rotate_left</span> Rotate left
-        </button>
-        <button
-          (click)="rotate(1)"
-          [disabled]="mode() === 'processing'"
-          title="Rotate 90° right (shortcut: R)"
-        >
-          <span class="material-symbols-outlined">rotate_right</span> Rotate right
+          <span class="material-symbols-outlined">add_box</span> Mark another photo
         </button>
         <button
           (click)="correctBoundaries()"
           [disabled]="activeIdx() < 0 || mode() === 'processing'"
-          title="Snap each corner of the active rectangle to the strongest contrast edge within 50 px (shortcut: C)"
+          title="Snap each corner of the active rectangle to the strongest contrast edge (±25 px) — press again within 2 s to search wider: L ±50, XL ±100 (shortcut: C)"
         >
           <span class="material-symbols-outlined">center_focus_strong</span> Correct boundaries
+          @if (snapBadge(); as b) {
+            <span class="snap-badge">{{ b }}</span>
+          }
         </button>
+        <span class="divider"></span>
         <button
           (click)="shrinkQuad()"
           [disabled]="activeIdx() < 0 || mode() === 'processing'"
@@ -111,13 +111,15 @@
         >
           <span class="material-symbols-outlined">delete</span> Delete
         </button>
+        <span class="divider"></span>
         <button
-          (click)="clearCorners()"
-          [disabled]="(!quads().length && !draft().length) || mode() === 'processing'"
-          title="Remove all rectangles"
+          (click)="resetRectangles()"
+          [disabled]="mode() === 'processing'"
+          title="Remove all rectangles and detect the photos afresh"
         >
-          <span class="material-symbols-outlined">layers_clear</span> Clear all
+          <span class="material-symbols-outlined">restart_alt</span> Reset
         </button>
+        <span class="divider"></span>
         <button
           class="primary"
           (click)="apply()"
@@ -125,6 +127,31 @@
           [title]="'Crop & rectify every rectangle (shortcut: ' + confirmKey + ')'"
         >
           <span class="material-symbols-outlined">crop</span> Apply
+        </button>
+        @if (downloadStyle() === 'zip') {
+          <span class="divider"></span>
+          <span class="split-btn">
+            <button
+              (click)="downloadZip()"
+              [disabled]="!zipEntries().length || mode() === 'processing'"
+              title="Download the collected photos as one ZIP (files carry the photo dates)"
+            >
+              <span class="material-symbols-outlined">folder_zip</span>
+              ZIP ({{ zipEntries().length }})
+            </button>
+            <button
+              class="split-more"
+              (click)="openCollection()"
+              [disabled]="mode() === 'processing'"
+              title="Show the photos collected for the ZIP"
+            >
+              <span class="material-symbols-outlined">photo_library</span>
+            </button>
+          </span>
+        }
+        <span class="divider"></span>
+        <button class="icon-only" (click)="settingsOpen.set(true)" title="Settings">
+          <span class="material-symbols-outlined">settings</span>
         </button>
       </div>
       <div class="canvas-host" #canvasHost (wheel)="onWheel($event)">
@@ -158,21 +185,58 @@
             }
           </span>
         }
-        <button (click)="rotate(-1)" title="Rotate 90° left (shortcut: L)">
-          <span class="material-symbols-outlined">rotate_left</span> Rotate left
+        <button class="icon-only" (click)="rotate(-1)" title="Rotate 90° left (shortcut: L)">
+          <span class="material-symbols-outlined">rotate_left</span>
         </button>
-        <button (click)="rotate(1)" title="Rotate 90° right (shortcut: R)">
-          <span class="material-symbols-outlined">rotate_right</span> Rotate right
+        <button class="icon-only" (click)="rotate(1)" title="Rotate 90° right (shortcut: R)">
+          <span class="material-symbols-outlined">rotate_right</span>
         </button>
-        <button (click)="backToEdit()" title="Back to the corner editor (shortcut: Esc)">
+        <button
+          (click)="backToEdit()"
+          title="Back to the corner editor (shortcut: Esc or Backspace)"
+        >
           <span class="material-symbols-outlined">arrow_back</span> Back to corners
+        </button>
+        <button (click)="closeResult()" title="Close this photo without saving it">
+          <span class="material-symbols-outlined">close</span> Close photo
         </button>
         <button
           class="primary"
           (click)="save()"
-          [title]="'Save PNG + XMP sidecar and go to the next photo (shortcut: ' + confirmKey + ')'"
+          [title]="
+            (downloadStyle() === 'zip'
+              ? 'Add the JPG (with embedded EXIF metadata) to the ZIP collection'
+              : 'Save as JPG with embedded EXIF metadata') +
+            ' and show the next unsaved photo (shortcut: ' +
+            confirmKey +
+            ')'
+          "
         >
           <span class="material-symbols-outlined">save</span> Save &amp; next
+        </button>
+        @if (downloadStyle() === 'zip') {
+          <span class="divider"></span>
+          <span class="split-btn">
+            <button
+              (click)="downloadZip()"
+              [disabled]="!zipEntries().length"
+              title="Download the collected photos as one ZIP (files carry the photo dates)"
+            >
+              <span class="material-symbols-outlined">folder_zip</span>
+              ZIP ({{ zipEntries().length }})
+            </button>
+            <button
+              class="split-more"
+              (click)="openCollection()"
+              title="Show the photos collected for the ZIP"
+            >
+              <span class="material-symbols-outlined">photo_library</span>
+            </button>
+          </span>
+        }
+        <span class="divider"></span>
+        <button class="icon-only" (click)="settingsOpen.set(true)" title="Settings">
+          <span class="material-symbols-outlined">settings</span>
         </button>
       </div>
       <div class="meta-bar">
@@ -193,6 +257,13 @@
             placeholder="Describe this photo…"
           />
         </label>
+        <button
+          (click)="usePrevious()"
+          [disabled]="!lastMeta()"
+          title="Fill date, time and description from the last save"
+        >
+          ↩ Use previous
+        </button>
         <button
           class="mic"
           (click)="dictate('field')"
@@ -223,15 +294,57 @@
             <button
               class="result-thumb"
               [class.current]="$index === resultIndex()"
+              [class.closed]="resultStatus()[$index] === 'closed'"
               (click)="goToResult($index)"
               [title]="'Show photo ' + ($index + 1) + ' / ' + resultCount()"
             >
               <img [src]="t" alt="Photo {{ $index + 1 }}" />
               <span class="num">{{ $index + 1 }}</span>
+              @if (resultStatus()[$index] === 'saved') {
+                <span class="badge">✓</span>
+              }
             </button>
           }
         </div>
       }
+    </section>
+
+    <!-- collected-for-ZIP overview (zip download style) -->
+    <section class="screen" [style.display]="mode() === 'collection' ? '' : 'none'">
+      <div class="toolbar">
+        <span class="hint">
+          {{ zipEntries().length }} photo{{ zipEntries().length === 1 ? '' : 's' }} collected for
+          the ZIP
+        </span>
+        <button (click)="backFromCollection()" title="Back (shortcut: Esc)">
+          <span class="material-symbols-outlined">arrow_back</span> Back
+        </button>
+        <button
+          class="primary"
+          (click)="downloadZip()"
+          [disabled]="!zipEntries().length"
+          title="Download the collected photos as one ZIP (files carry the photo dates)"
+        >
+          <span class="material-symbols-outlined">folder_zip</span> Download ZIP
+        </button>
+      </div>
+      <div class="collection">
+        @for (e of zipEntries(); track e.name) {
+          <figure class="collected">
+            <img [src]="e.thumb" [alt]="e.name" />
+            <figcaption [title]="e.name">{{ e.name }}</figcaption>
+            <button
+              class="thumb-remove"
+              (click)="removeCollected(e.name)"
+              title="Remove from the ZIP collection"
+            >
+              ×
+            </button>
+          </figure>
+        } @empty {
+          <p class="muted">Nothing collected yet — photos land here when you save them.</p>
+        }
+      </div>
     </section>
 
     <!-- all done -->
@@ -240,7 +353,19 @@
         <h1>All photos processed 🎉</h1>
         <p>{{ savedCount() }} saved</p>
         <p class="muted">Drop more photos anywhere to continue, or start a new batch.</p>
-        <button class="primary" (click)="reset()">Start a new batch</button>
+        @if (zipEntries().length; as n) {
+          <p>
+            <button
+              class="primary"
+              (click)="downloadZip()"
+              title="One ZIP with all saved photos; extracting restores each photo's date as the file's modified/creation time (dates before 1980 become 1980 when extracted with Finder)"
+            >
+              <span class="material-symbols-outlined">folder_zip</span>
+              Download all {{ n }} as ZIP — files carry the photo dates
+            </button>
+          </p>
+        }
+        <button (click)="reset()">Start a new batch</button>
       </div>
     </section>
   </div>
@@ -309,6 +434,14 @@
             >
               📅 {{ e.text }}
               <button
+                class="x plusday"
+                (click)="applyScratch(e, 1); $event.stopPropagation()"
+                [disabled]="mode() !== 'result'"
+                title="Use as the date plus one day"
+              >
+                +1d
+              </button>
+              <button
                 class="x"
                 (click)="removeScratch(e.id); $event.stopPropagation()"
                 title="Remove"
@@ -344,6 +477,62 @@
         </div>
       </aside>
     }
+  }
+
+  <!-- settings modal (cogwheel in the toolbars) -->
+  @if (settingsOpen()) {
+    <div class="modal-backdrop" (click)="settingsOpen.set(false)">
+      <div class="modal" (click)="$event.stopPropagation()">
+        <div class="modal-head">
+          <h2>Settings</h2>
+          <button class="x" (click)="settingsOpen.set(false)" title="Close (shortcut: Esc)">
+            ×
+          </button>
+        </div>
+        <label>
+          JPG quality: <span class="setting-value">{{ (jpegQuality() * 100).toFixed(0) }}%</span>
+          <input
+            type="range"
+            min="0.5"
+            max="1"
+            step="0.01"
+            [value]="jpegQuality()"
+            (input)="onQuality($event)"
+          />
+        </label>
+        <label>
+          Filename suffix — saved as
+          <span class="setting-value">photo{{ filenameSuffix() }}.jpg</span>
+          <input
+            type="text"
+            [value]="filenameSuffix()"
+            (change)="onSuffix($event)"
+            placeholder="e.g. -result (may be empty)"
+          />
+        </label>
+        <div class="setting-label">Download style</div>
+        <div class="radio-group">
+          <label>
+            <input
+              type="radio"
+              name="download-style"
+              [checked]="downloadStyle() === 'single'"
+              (change)="downloadStyle.set('single')"
+            />
+            Direct download — every save downloads its JPG
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="download-style"
+              [checked]="downloadStyle() === 'zip'"
+              (change)="downloadStyle.set('zip')"
+            />
+            Collect into ZIP — saves collect; download one ZIP whose files carry the photo dates
+          </label>
+        </div>
+      </div>
+    </div>
   }
 
   <input #fileInput type="file" accept="image/*" multiple hidden (change)="onFileInput($event)" />

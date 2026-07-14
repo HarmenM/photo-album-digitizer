@@ -60,6 +60,9 @@
   cursor: pointer;
   overflow: hidden;
   min-height: 60px;
+  /* .thumbs is a flex column: without this a full drawer squashes the
+     thumbnails to fit instead of scrolling */
+  flex-shrink: 0;
 }
 
 .thumb img {
@@ -78,7 +81,8 @@
   border-color: #22d3ee;
 }
 
-.thumb .thumb-remove {
+.thumb .thumb-remove,
+.collected .thumb-remove {
   position: absolute;
   top: 4px;
   right: 4px;
@@ -90,14 +94,18 @@
   font-size: 1rem;
   line-height: 1.3rem;
   text-align: center;
+  border: none;
+  padding: 0;
 }
 
-.thumb .thumb-remove:hover {
+.thumb .thumb-remove:hover,
+.collected .thumb-remove:hover {
   background: #b91c1c;
   color: #fff;
 }
 
-.thumb .badge {
+.thumb .badge,
+.result-thumb .badge {
   position: absolute;
   top: 4px;
   left: 4px;
@@ -205,13 +213,45 @@ button {
 }
 
 .toolbar button {
+  position: relative; /* anchors the snap-escalation badge */
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
 }
 
+/* progressive "Correct boundaries": current search-area escalation (L, XL) */
+.snap-badge {
+  position: absolute;
+  top: -0.5rem;
+  right: -0.5rem;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  padding: 0 0.2rem;
+  box-sizing: border-box;
+  border-radius: 0.65rem;
+  background: #0891b2;
+  border: 1px solid #22d3ee;
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 1.2rem;
+  text-align: center;
+}
+
 .toolbar .material-symbols-outlined {
   font-size: 1.15rem;
+}
+
+/* icon-only toolbar button (e.g. rotate): square padding, no label */
+.toolbar button.icon-only {
+  padding: 0.5rem 0.6rem;
+}
+
+/* vertical divider between toolbar button groups */
+.toolbar .divider {
+  align-self: stretch;
+  width: 1px;
+  background: #475569;
+  flex-shrink: 0;
 }
 
 button:hover:not(:disabled) {
@@ -223,7 +263,7 @@ button:disabled {
   cursor: default;
 }
 
-/* toolbar toggle that is currently engaged (e.g. adding a photo) */
+/* toolbar toggle that is currently engaged (e.g. marking a photo) */
 button.active {
   background: #0e7490;
   border-color: #22d3ee;
@@ -240,6 +280,163 @@ button.primary {
 
 button.primary:hover:not(:disabled) {
   background: #06b6d4;
+}
+
+/* split button: main action + attached right segment (e.g. ZIP download +
+   show the collection) */
+.split-btn {
+  display: inline-flex;
+}
+
+.split-btn button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 0.5rem 0 0 0.5rem;
+}
+
+.split-btn .split-more {
+  border-radius: 0 0.5rem 0.5rem 0;
+  border-left: none;
+  padding: 0.5rem 0.5rem;
+}
+
+/* --- settings modal --- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.65);
+}
+
+.modal {
+  width: 380px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal-head .x {
+  border: none;
+  background: none;
+  color: #94a3b8;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0.2rem 0.4rem;
+}
+
+.modal-head .x:hover {
+  color: #e2e8f0;
+  background: none;
+}
+
+.modal label {
+  display: block;
+  margin: 0.9rem 0;
+  font-size: 0.9rem;
+}
+
+.modal input[type='range'] {
+  width: 100%;
+  margin-top: 0.4rem;
+  accent-color: #22d3ee;
+}
+
+.modal input[type='text'] {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.4rem;
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 0.4rem;
+  color: #e2e8f0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+}
+
+.setting-value {
+  color: #22d3ee;
+}
+
+.setting-label {
+  font-size: 0.9rem;
+  margin-top: 1rem;
+}
+
+.modal .radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.modal .radio-group label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+  color: #cbd5e1;
+}
+
+/* --- collected-for-ZIP overview --- */
+
+.collection {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-content: flex-start;
+}
+
+.collected {
+  position: relative;
+  margin: 0;
+  padding: 0.5rem;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+}
+
+.collected img {
+  display: block;
+  height: 140px;
+  border-radius: 0.25rem;
+}
+
+.collected figcaption {
+  margin-top: 0.4rem;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.collected .thumb-remove {
+  top: 0.75rem;
+  right: 0.75rem;
 }
 
 /* --- metadata bar (result screen) --- */
@@ -339,6 +536,20 @@ button.mic {
   background: none;
 }
 
+/* "+1d" mini-button on date chips: apply the date shifted one day forward */
+.chip .plusday {
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.chip .plusday:disabled {
+  color: #475569;
+}
+
+.chip .plusday:hover:not(:disabled) {
+  color: #22d3ee;
+}
+
 /* --- canvas area --- */
 
 .canvas-host {
@@ -396,6 +607,11 @@ canvas {
 
 .result-thumb.current {
   border-color: #22d3ee;
+}
+
+/* closed without saving: processed, but visibly not carrying a ✓ */
+.result-thumb.closed img {
+  opacity: 0.35;
 }
 
 /* crop-order number, same numbering as the bubbles in the corner editor */
@@ -592,4 +808,10 @@ button.clear-scratch:hover:not(:disabled) {
 .done-box h1 {
   font-size: 1.6rem;
   margin-bottom: 0.75rem;
+}
+
+.done-box button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
