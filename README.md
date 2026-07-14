@@ -67,6 +67,9 @@ npm run build    # production build into dist/photo-album-digitizer
 npm test         # unit tests
 ```
 
+Every push to `main` is built and published to GitHub Pages by
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+
 Built with Angular (zoneless, signals) and no image or metadata libraries —
 the photo detection, perspective warp, EXIF writing, and ZIP packing are
 hand-rolled pure TypeScript modules in `src/app/`.
