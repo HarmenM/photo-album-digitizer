@@ -519,6 +519,23 @@ button.mic {
   padding: 0.4rem 0.6rem;
 }
 
+/* active-recording state on either mic button (dictaphone: press to stop) */
+button.recording {
+  color: #fca5a5;
+  border-color: #ef4444;
+  background: #450a0a;
+}
+
+button.recording .material-symbols-outlined {
+  animation: recording-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
 .voice-chip {
   color: #22d3ee;
   background: #0f172a;
@@ -925,6 +942,41 @@ button.tune-preview.off {
   font-weight: 600;
 }
 
+/* The readout doubles as a click-to-type field. It carries a transparent
+   border and the same border-box model as the input it swaps to, so clicking
+   to edit adds no border width and the row height never shifts. */
+.tune-slider b.editable {
+  cursor: text;
+  display: inline-block;
+  box-sizing: border-box;
+  padding: 0 0.15rem;
+  border: 1px solid transparent;
+  border-radius: 0.2rem;
+}
+
+.tune-slider b.editable:hover {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+/* inline numeric input shown while a readout is being typed into */
+.tune-slider .tune-num {
+  box-sizing: border-box;
+  width: 3.5rem;
+  padding: 0 0.15rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: right;
+  color: #22d3ee;
+  background: #0f172a;
+  border: 1px solid #22d3ee;
+  border-radius: 0.2rem;
+}
+
+.tune-slider .tune-num:focus {
+  outline: none;
+}
+
 .tune-slider input[type='range'] {
   display: block;
   width: 100%;
@@ -965,7 +1017,16 @@ button.tune-preview.off {
 .modal-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
   margin-top: 0.5rem;
+}
+
+/* explanatory paragraph inside a modal (e.g. the mic-consent notice) */
+.modal-note {
+  margin: 0.9rem 0 0.2rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #cbd5e1;
 }
 
 /* --- precision loupe while dragging a corner --- */

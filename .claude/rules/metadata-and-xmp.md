@@ -47,4 +47,23 @@
   (only saves that carried input; cleared on batch reset).
 - Voice dictation (Web Speech API, Chrome-only) is for descriptions only; dates
   are typed or auto-classified by the parser in `exif.ts`, which accepts
-  English and Dutch month names.
+  English and Dutch month names. It is a **dictaphone toggle**: a mic press
+  starts recording (`continuous` recognition, so it does not auto-stop on a
+  pause), the next press stops and applies the accumulated transcript. While
+  recording, both mic buttons show a red pulsing `stop` icon labeled "Stop
+  recording"; the status chip previews interim words. `dictate()` toggles,
+  `startDictation()`/`stopDictation()`/`finishDictation()` do the work.
+  Push-to-talk (hold to record, release to apply) was tried and reverted: the
+  Web Speech API's warm-up after `start()` swallows the first word and the
+  cut-off at `stop()` swallows the last whenever the user speaks hastily —
+  the toggle sidesteps both because the user naturally waits. `finishDictation`
+  still applies `dictationText` (final) **plus** `dictationInterim` (the last
+  not-yet-final tail) so stopping never drops trailing words.
+- Before the first dictation, if the browser has not yet granted mic access
+  (`navigator.permissions` reports anything but `granted`, or the API is
+  missing) a **consent modal** explains that some browsers route audio through
+  a cloud speech-to-text service, with Cancel / Continue. Continue only
+  **acknowledges** (`micConsentAcknowledged`) — it does NOT start recording;
+  the user presses the mic again to begin. Cancel/Esc/backdrop dismiss it.
+  Once acknowledged (or the permission is already granted) later presses start
+  straight away, so the modal never nags again.

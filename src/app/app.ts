@@ -55,6 +55,9 @@ interface TunePreset {
   tune: Tune;
 }
 
+/** The tune-panel readouts that double as click-to-type inputs. */
+type TuneNumField = 'black' | 'gamma' | 'white' | 'brightness' | 'contrast';
+
 interface ScratchEntry {
   id: number;
   kind: 'date' | 'description';
@@ -75,14 +78,22 @@ interface EdgeDrag {
 }
 
 // the Web Speech API recognition types are not in TypeScript's DOM lib yet
+interface RecognitionResult extends ArrayLike<{ transcript: string }> {
+  isFinal: boolean;
+}
+interface RecognitionEvent {
+  results: ArrayLike<RecognitionResult>;
+}
 interface Recognition {
   lang: string;
   interimResults: boolean;
+  continuous: boolean; // keep listening until stop() — dictaphone mode
   maxAlternatives: number;
-  onresult: ((ev: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onresult: ((ev: RecognitionEvent) => void) | null;
   onerror: ((ev: { error: string }) => void) | null;
   onend: (() => void) | null;
   start(): void;
+  stop(): void;
 }
 
 const HIT_RADIUS_CSS_PX = 16;
@@ -143,6 +154,17 @@ export class App {
   protected readonly tunePresets = signal<TunePreset[]>([]);
   protected readonly presetModalOpen = signal(false);
   private presetId = 0;
+  // which slider readout is currently being typed into (click-to-edit); the
+  // matching <b> is swapped for a digit-only input while set
+  protected readonly editingTuneField = signal<TuneNumField | null>(null);
+  // Escape cancels an in-progress edit; the flag tells the (blur) commit that
+  // fired from the Escape-triggered blur to discard instead of applying
+  private tuneEditCanceled = false;
+  // the value applies live as you type, debounced; this holds the pending
+  // timer and the tune snapshot taken when editing began, so a cancel can
+  // undo whatever the live edits already changed
+  private tuneEditTimer = 0;
+  private tuneEditSnapshot: Tune | null = null;
   // the gamma slider is log-scaled: ±100 ↦ gamma 0.1..10, 0 = neutral
   protected readonly gammaSliderValue = computed(() =>
     Math.round(Math.log10(this.tuneLevels().gamma) * 100),
@@ -222,6 +244,19 @@ export class App {
   protected readonly scratchCollapsed = signal(false);
 
   protected readonly listening = signal(false);
+  // consent modal shown before the first dictation when the mic permission
+  // has not been granted yet (some browsers stream audio to a cloud STT)
+  protected readonly micConsentOpen = signal(false);
+  // set once the user presses Continue; the modal then never nags again this
+  // session and a later mic press starts recording directly
+  private micConsentAcknowledged = false;
+  private pendingDictateTarget: 'field' | 'scratchpad' | null = null;
+  // active dictation (dictaphone: press to start, press again to stop)
+  private rec: Recognition | null = null;
+  private dictationTarget: 'field' | 'scratchpad' = 'field';
+  private dictationText = ''; // accumulated final transcript
+  private dictationInterim = ''; // last not-yet-final tail (applied too, so stopping never drops it)
+  private dictationErrored = false;
   protected readonly voiceStatus = signal<string | null>(null);
   protected readonly zoom = signal(1);
   protected readonly loupeVisible = signal(false);
@@ -244,6 +279,9 @@ export class App {
   // while the side panel is collapsed)
   private readonly histCanvas = viewChild<ElementRef<HTMLCanvasElement>>('histCanvas');
   private readonly presetNameInput = viewChild<ElementRef<HTMLInputElement>>('presetNameInput');
+  // the inline click-to-edit number input; only one renders at a time (@if on
+  // editingTuneField), so a single shared ref always points at the live one
+  private readonly tuneNumInput = viewChild<ElementRef<HTMLInputElement>>('tuneNumInput');
 
   private image: ImageBitmap | null = null;
   private baseName = 'photo';
@@ -717,7 +755,64 @@ export class App {
 
   // --- speech input -----------------------------------------------------------
 
-  private recognize(onDone: (alternatives: string[]) => void): void {
+  /**
+   * Entry point for the mic buttons — a dictaphone toggle: a press starts
+   * recording, the next press stops it (and applies what was heard).
+   *
+   * The first time the browser has not yet granted mic access we explain
+   * that some browsers route audio through a cloud speech-to-text service.
+   * Pressing Continue only acknowledges the notice — it does NOT start
+   * recording; the user presses the mic again to actually begin. Once
+   * acknowledged (or the permission is already granted) later presses start
+   * straight away.
+   */
+  protected dictate(target: 'field' | 'scratchpad'): void {
+    if (this.listening()) {
+      this.stopDictation();
+      return;
+    }
+    if (this.micConsentAcknowledged) {
+      this.startDictation(target);
+      return;
+    }
+    void this.isMicGranted().then((granted) => {
+      if (granted) {
+        this.startDictation(target);
+      } else {
+        this.pendingDictateTarget = target;
+        this.micConsentOpen.set(true);
+      }
+    });
+  }
+
+  /** Resolve to true only when the mic permission is already 'granted'. */
+  private async isMicGranted(): Promise<boolean> {
+    try {
+      const query = navigator.permissions?.query?.bind(navigator.permissions);
+      if (!query) return false; // no Permissions API (e.g. Firefox) → explain to be safe
+      const status = await query({ name: 'microphone' } as unknown as PermissionDescriptor);
+      return status.state === 'granted';
+    } catch {
+      return false; // 'microphone' descriptor unsupported → explain to be safe
+    }
+  }
+
+  /** Continue from the consent modal: acknowledge only — do NOT start yet. */
+  protected confirmMicConsent(): void {
+    this.micConsentAcknowledged = true;
+    this.micConsentOpen.set(false);
+    this.pendingDictateTarget = null;
+    this.setVoiceStatus('Microphone ready — press the mic again to start');
+  }
+
+  /** Cancel the consent modal without touching the mic. */
+  protected cancelMicConsent(): void {
+    this.micConsentOpen.set(false);
+    this.pendingDictateTarget = null;
+  }
+
+  /** Begin recording; keeps listening until stopDictation() (continuous). */
+  private startDictation(target: 'field' | 'scratchpad'): void {
     const w = window as unknown as Record<string, new () => Recognition>;
     const RecognitionCtor = w['SpeechRecognition'] ?? w['webkitSpeechRecognition'];
     if (!RecognitionCtor) {
@@ -727,28 +822,85 @@ export class App {
     if (this.listening()) return;
     const rec = new RecognitionCtor();
     rec.lang = navigator.language || 'en-US';
-    rec.interimResults = false;
-    rec.maxAlternatives = 3;
+    rec.interimResults = true; // so the status can preview words as they land
+    rec.continuous = true; // dictaphone: don't auto-stop on the first pause
+    rec.maxAlternatives = 1;
+    this.rec = rec;
+    this.dictationTarget = target;
+    this.dictationText = '';
+    this.dictationInterim = '';
+    this.dictationErrored = false;
     this.listening.set(true);
-    rec.onresult = (ev) => onDone(Array.from(ev.results[0]).map((a) => a.transcript));
-    rec.onerror = (ev) => this.setVoiceStatus(`Speech recognition error: ${ev.error}`);
-    rec.onend = () => this.listening.set(false);
+    this.setVoiceStatus('Recording — press the mic again to stop', 0);
+    rec.onresult = (ev) => {
+      // ev.results is cumulative; rebuild the final text and preview interim
+      let final = '';
+      let interim = '';
+      for (let i = 0; i < ev.results.length; i++) {
+        const res = ev.results[i];
+        const transcript = res[0]?.transcript ?? '';
+        if (res.isFinal) final += transcript;
+        else interim += transcript;
+      }
+      this.dictationText = final;
+      // keep the not-yet-final tail: releasing right after a sentence often
+      // stops before the engine promotes it to a final result, and we still
+      // want those words (finishDictation combines final + interim)
+      this.dictationInterim = interim;
+      const preview = (final + interim).trim();
+      this.setVoiceStatus(
+        preview ? `Recording: “${preview}”` : 'Recording — press the mic again to stop',
+        0,
+      );
+    };
+    rec.onerror = (ev) => {
+      this.dictationErrored = true;
+      this.setVoiceStatus(`Speech recognition error: ${ev.error}`);
+    };
+    rec.onend = () => {
+      // fires after stop() and after any error; finalize here
+      this.listening.set(false);
+      this.rec = null;
+      if (this.dictationErrored) {
+        this.dictationErrored = false;
+        this.dictationText = '';
+        this.dictationInterim = '';
+        return;
+      }
+      this.finishDictation();
+    };
     rec.start();
   }
 
-  /** Dictate a description, into the current field or the scratchpad. */
-  protected dictate(target: 'field' | 'scratchpad'): void {
-    this.setVoiceStatus('Listening — say a description', 0);
-    this.recognize((alternatives) => {
-      const heard = alternatives[0]?.trim() ?? '';
-      if (!heard) {
-        this.setVoiceStatus('Heard nothing — try again');
-        return;
-      }
-      if (target === 'field') this.descriptionField.set(heard);
-      else this.addScratchEntry('description', heard);
-      this.setVoiceStatus(`Heard “${heard}” — description ${target === 'field' ? 'set' : 'noted'}`);
-    });
+  /** Stop the active recording; onend then applies what was heard. */
+  private stopDictation(): void {
+    const rec = this.rec;
+    if (!rec) {
+      this.listening.set(false);
+      return;
+    }
+    try {
+      rec.stop();
+    } catch {
+      // already stopping — onend will still run
+    }
+  }
+
+  /** Apply the accumulated transcript to the field or scratchpad. */
+  private finishDictation(): void {
+    // combine final + any not-yet-final tail so a quick release keeps the last words
+    const heard = (this.dictationText + this.dictationInterim).trim();
+    this.dictationText = '';
+    this.dictationInterim = '';
+    if (!heard) {
+      this.setVoiceStatus('Heard nothing — try again');
+      return;
+    }
+    if (this.dictationTarget === 'field') this.descriptionField.set(heard);
+    else this.addScratchEntry('description', heard);
+    this.setVoiceStatus(
+      `Heard “${heard}” — description ${this.dictationTarget === 'field' ? 'set' : 'noted'}`,
+    );
   }
 
   private voiceStatusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -870,6 +1022,7 @@ export class App {
   }
 
   protected setTuneChannel(c: TuneChannel): void {
+    this.editingTuneField.set(null); // a levels edit belongs to the channel it was opened on
     this.tuneChannel.set(c);
     this.scheduleHistogramDraw();
   }
@@ -899,6 +1052,110 @@ export class App {
   protected onTuneBC(part: 'brightness' | 'contrast', ev: Event): void {
     const v = +(ev.target as HTMLInputElement).value;
     this.updateTune((t) => ({ ...t, [part]: v }));
+  }
+
+  /** Turn a slider readout into a text input and focus it (click-to-type). */
+  protected startEditTuneField(field: TuneNumField): void {
+    this.editingTuneField.set(field);
+    this.tuneEditCanceled = false;
+    // remember the pre-edit tune so a cancel can undo the live edits
+    this.tuneEditSnapshot = structuredClone(this.tune());
+    requestAnimationFrame(() => {
+      const el = this.tuneNumInput()?.nativeElement;
+      if (!el) return;
+      // seed the value imperatively — the input has no [value] binding on
+      // purpose, so live-applying while typing can't rewrite the caret away
+      el.value = this.tuneFieldText(field);
+      el.focus();
+      el.select();
+    });
+  }
+
+  /** The current value of a tune field, formatted as its readout shows it. */
+  private tuneFieldText(field: TuneNumField): string {
+    switch (field) {
+      case 'black':
+        return String(this.tuneLevels().black);
+      case 'white':
+        return String(this.tuneLevels().white);
+      case 'gamma':
+        return this.tuneLevels().gamma.toFixed(2);
+      case 'brightness':
+        return String(this.tune().brightness);
+      case 'contrast':
+        return String(this.tune().contrast);
+    }
+  }
+
+  /** Keep the input to the characters this field allows (digits, plus sign
+      for the signed fields and one dot for gamma) — no letters, no `e` —
+      then apply the value live, debounced 200 ms. */
+  protected onTuneNumInput(ev: Event): void {
+    const field = this.editingTuneField();
+    if (!field) return;
+    const input = ev.target as HTMLInputElement;
+    input.value = filterTuneNumInput(input.value, field);
+    const raw = input.value.trim();
+    clearTimeout(this.tuneEditTimer);
+    this.tuneEditTimer = window.setTimeout(() => {
+      if (this.editingTuneField() !== field) return; // edit ended meanwhile
+      const n = Number(raw);
+      if (raw !== '' && raw !== '-' && raw !== '.' && Number.isFinite(n)) {
+        this.applyTuneNumber(field, n);
+      }
+    }, 200);
+  }
+
+  protected onTuneNumKeydown(ev: KeyboardEvent): void {
+    if (ev.key !== 'Enter' && ev.key !== 'Escape') return;
+    // keep the global shortcut listener out of it — Enter would confirm the
+    // save phase, Escape would leave the result screen
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.key === 'Escape') this.tuneEditCanceled = true;
+    (ev.target as HTMLInputElement).blur(); // (blur) commits or, if canceled, discards
+  }
+
+  /** Commit the typed value (clamped to the slider's range) and close the
+      editor. Escape, or leaving it blank/unparseable, reverts to the
+      pre-edit tune — undoing whatever the live debounce already applied. */
+  protected commitTuneField(ev: Event): void {
+    clearTimeout(this.tuneEditTimer);
+    const field = this.editingTuneField();
+    this.editingTuneField.set(null);
+    const snapshot = this.tuneEditSnapshot;
+    this.tuneEditSnapshot = null;
+    const raw = (ev.target as HTMLInputElement).value.trim();
+    const n = Number(raw);
+    const revert = this.tuneEditCanceled || raw === '' || !Number.isFinite(n);
+    this.tuneEditCanceled = false;
+    if (revert) {
+      if (snapshot) this.updateTune(() => snapshot);
+      return;
+    }
+    if (field) this.applyTuneNumber(field, n);
+  }
+
+  /** Apply a typed number to its tune field, clamped like its slider. */
+  private applyTuneNumber(field: TuneNumField, n: number): void {
+    if (field === 'brightness' || field === 'contrast') {
+      this.updateTune((t) => ({ ...t, [field]: clamp(Math.round(n), -100, 100) }));
+      return;
+    }
+    const ch = this.tuneChannel();
+    this.updateTune((t) => {
+      const cur = t.levels[ch];
+      let l: ChannelLevels;
+      if (field === 'gamma') {
+        l = { ...cur, gamma: clamp(n, 0.1, 10) };
+      } else if (field === 'black') {
+        // black and white clamp against each other, same as the sliders
+        l = { ...cur, black: clamp(Math.round(n), 0, cur.white - 1) };
+      } else {
+        l = { ...cur, white: clamp(Math.round(n), cur.black + 1, 255) };
+      }
+      return { ...t, levels: { ...t.levels, [ch]: l } };
+    });
   }
 
   protected resetTune(): void {
@@ -1098,6 +1355,10 @@ export class App {
     }
     if (ev.key === 'Escape' && this.presetModalOpen()) {
       this.presetModalOpen.set(false);
+      return;
+    }
+    if (ev.key === 'Escape' && this.micConsentOpen()) {
+      this.cancelMicConsent();
       return;
     }
     if (ev.key === 'Escape' && this.mode() === 'collection') {
@@ -1898,6 +2159,7 @@ export class App {
     rc.height = src.height;
     rc.getContext('2d')!.drawImage(src, 0, 0);
     // each rectified photo keeps its own tune across strip navigation
+    this.editingTuneField.set(null); // drop any half-typed readout from the previous photo
     this.invalidateTuneCache();
     this.tunePreview.set(true);
     this.tune.set(this.tunes[i] ?? defaultTune());
@@ -2168,6 +2430,31 @@ function addDaysIso(iso: string, days: number): string {
 /** Keep a filename suffix safe: no path separators or forbidden characters. */
 function sanitizeSuffix(raw: string): string {
   return raw.replace(/[/\\:*?"<>|]/g, '').slice(0, 40);
+}
+
+/** Clamp a number to [lo, hi]. */
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+/**
+ * Strip characters a tune readout input can't hold: digits everywhere, a
+ * leading minus for the signed fields (brightness/contrast), and a single
+ * decimal point for gamma. Letters and `e` are rejected — the point of the
+ * click-to-edit is a strictly numeric field.
+ */
+function filterTuneNumInput(v: string, field: TuneNumField): string {
+  if (field === 'gamma') {
+    const cleaned = v.replace(/[^0-9.]/g, '');
+    const dot = cleaned.indexOf('.');
+    // keep only the first dot
+    return dot < 0 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
+  }
+  const digits = v.replace(/[^0-9]/g, '');
+  // brightness/contrast are signed; keep a single leading minus
+  return (field === 'brightness' || field === 'contrast') && v.trimStart().startsWith('-')
+    ? '-' + digits
+    : digits;
 }
 
 /** Loose shape check for tune presets loaded from localStorage. */

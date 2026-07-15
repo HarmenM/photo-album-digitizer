@@ -301,11 +301,11 @@
         </button>
         <button
           class="mic"
+          [class.recording]="listening()"
           (click)="dictate('field')"
-          [disabled]="listening()"
-          title="Say the description out loud"
+          [title]="listening() ? 'Stop recording' : 'Say the description out loud'"
         >
-          <span class="material-symbols-outlined">mic</span>
+          <span class="material-symbols-outlined">{{ listening() ? 'stop' : 'mic' }}</span>
         </button>
         @if (voiceStatus(); as vs) {
           <span class="voice-chip">{{ vs }}</span>
@@ -439,9 +439,9 @@
           </button>
         </div>
         <div class="scratch-buttons">
-          <button (click)="dictate('scratchpad')" [disabled]="listening()">
-            <span class="material-symbols-outlined">mic</span>
-            {{ listening() ? 'Listening…' : 'Dictate a description' }}
+          <button (click)="dictate('scratchpad')" [class.recording]="listening()">
+            <span class="material-symbols-outlined">{{ listening() ? 'stop' : 'mic' }}</span>
+            {{ listening() ? 'Stop recording' : 'Dictate a description' }}
           </button>
         </div>
         <div class="scratch-manual">
@@ -561,10 +561,29 @@
               }
             </div>
             <canvas #histCanvas class="tune-hist"></canvas>
-            <label class="tune-slider">
+            <!-- The <b> readouts double as click-to-type fields: clicking one
+                 swaps it for a digit-only input (see startEditTuneField). The
+                 rows are <div>, not <label> — a <label> would forward a click
+                 on the number to the range slider. -->
+            <div class="tune-slider">
               <span
-                >Black point <b>{{ tuneLevels().black }}</b></span
-              >
+                >Black point
+                @if (editingTuneField() === 'black') {
+                  <input
+                    #tuneNumInput
+                    class="tune-num"
+                    type="text"
+                    inputmode="numeric"
+                    (input)="onTuneNumInput($event)"
+                    (keydown)="onTuneNumKeydown($event)"
+                    (blur)="commitTuneField($event)"
+                  />
+                } @else {
+                  <b class="editable" (click)="startEditTuneField('black')" title="Click to type"
+                    >{{ tuneLevels().black }}</b
+                  >
+                }
+              </span>
               <input
                 type="range"
                 min="0"
@@ -573,11 +592,26 @@
                 [value]="tuneLevels().black"
                 (input)="onTuneLevel('black', $event)"
               />
-            </label>
-            <label class="tune-slider">
+            </div>
+            <div class="tune-slider">
               <span
-                >Midtones (gamma) <b>{{ tuneLevels().gamma.toFixed(2) }}</b></span
-              >
+                >Midtones (gamma)
+                @if (editingTuneField() === 'gamma') {
+                  <input
+                    #tuneNumInput
+                    class="tune-num"
+                    type="text"
+                    inputmode="decimal"
+                    (input)="onTuneNumInput($event)"
+                    (keydown)="onTuneNumKeydown($event)"
+                    (blur)="commitTuneField($event)"
+                  />
+                } @else {
+                  <b class="editable" (click)="startEditTuneField('gamma')" title="Click to type"
+                    >{{ tuneLevels().gamma.toFixed(2) }}</b
+                  >
+                }
+              </span>
               <input
                 type="range"
                 min="-100"
@@ -586,11 +620,26 @@
                 [value]="gammaSliderValue()"
                 (input)="onTuneLevel('gamma', $event)"
               />
-            </label>
-            <label class="tune-slider">
+            </div>
+            <div class="tune-slider">
               <span
-                >White point <b>{{ tuneLevels().white }}</b></span
-              >
+                >White point
+                @if (editingTuneField() === 'white') {
+                  <input
+                    #tuneNumInput
+                    class="tune-num"
+                    type="text"
+                    inputmode="numeric"
+                    (input)="onTuneNumInput($event)"
+                    (keydown)="onTuneNumKeydown($event)"
+                    (blur)="commitTuneField($event)"
+                  />
+                } @else {
+                  <b class="editable" (click)="startEditTuneField('white')" title="Click to type"
+                    >{{ tuneLevels().white }}</b
+                  >
+                }
+              </span>
               <input
                 type="range"
                 min="1"
@@ -599,11 +648,26 @@
                 [value]="tuneLevels().white"
                 (input)="onTuneLevel('white', $event)"
               />
-            </label>
-            <label class="tune-slider">
+            </div>
+            <div class="tune-slider">
               <span
-                >Brightness <b>{{ tune().brightness }}</b></span
-              >
+                >Brightness
+                @if (editingTuneField() === 'brightness') {
+                  <input
+                    #tuneNumInput
+                    class="tune-num"
+                    type="text"
+                    inputmode="numeric"
+                    (input)="onTuneNumInput($event)"
+                    (keydown)="onTuneNumKeydown($event)"
+                    (blur)="commitTuneField($event)"
+                  />
+                } @else {
+                  <b class="editable" (click)="startEditTuneField('brightness')" title="Click to type"
+                    >{{ tune().brightness }}</b
+                  >
+                }
+              </span>
               <input
                 type="range"
                 min="-100"
@@ -612,11 +676,26 @@
                 [value]="tune().brightness"
                 (input)="onTuneBC('brightness', $event)"
               />
-            </label>
-            <label class="tune-slider">
+            </div>
+            <div class="tune-slider">
               <span
-                >Contrast <b>{{ tune().contrast }}</b></span
-              >
+                >Contrast
+                @if (editingTuneField() === 'contrast') {
+                  <input
+                    #tuneNumInput
+                    class="tune-num"
+                    type="text"
+                    inputmode="numeric"
+                    (input)="onTuneNumInput($event)"
+                    (keydown)="onTuneNumKeydown($event)"
+                    (blur)="commitTuneField($event)"
+                  />
+                } @else {
+                  <b class="editable" (click)="startEditTuneField('contrast')" title="Click to type"
+                    >{{ tune().contrast }}</b
+                  >
+                }
+              </span>
               <input
                 type="range"
                 min="-100"
@@ -625,7 +704,7 @@
                 [value]="tune().contrast"
                 (input)="onTuneBC('contrast', $event)"
               />
-            </label>
+            </div>
             <div class="tune-actions">
               <button
                 (click)="useLastTune()"
@@ -751,6 +830,27 @@
         </label>
         <div class="modal-actions">
           <button class="primary" (click)="saveTunePreset(presetNameInput.value)">Save</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- mic-consent modal: shown before the first dictation when the browser
+       has not yet granted microphone access -->
+  @if (micConsentOpen()) {
+    <div class="modal-backdrop" (click)="cancelMicConsent()">
+      <div class="modal narrow" (click)="$event.stopPropagation()">
+        <div class="modal-head">
+          <h2>Use the microphone?</h2>
+          <button class="x" (click)="cancelMicConsent()" title="Close (shortcut: Esc)">×</button>
+        </div>
+        <p class="modal-note">
+          Some browsers use an external speech-to-text service. It could be that your voice
+          messages are sent to the cloud.
+        </p>
+        <div class="modal-actions">
+          <button (click)="cancelMicConsent()">Cancel</button>
+          <button class="primary" (click)="confirmMicConsent()">Continue</button>
         </div>
       </div>
     </div>

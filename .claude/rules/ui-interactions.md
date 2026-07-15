@@ -106,7 +106,21 @@ Interaction invariants:
   contrast — see image-pipeline.md): per rectified photo, kept while
   stepping through the strip, baked into the save. Channel buttons carry a
   small amber dot when that channel's levels are non-neutral; ↺ Reset
-  restores the current photo to neutral. The icon-only eye toggle (Material
+  restores the current photo to neutral. Each slider's numeric readout (the
+  cyan `<b>`) is **click-to-edit**: clicking swaps it for an inline input to
+  type an exact value — digits only, plus a leading minus for
+  brightness/contrast and a single dot for gamma (`filterTuneNumInput`
+  strips the rest, so letters/`e` never land). The value applies **live
+  while typing, debounced 200 ms** (clamped to the slider's range,
+  black/white still fenced off each other); Enter or blur commits and
+  closes. Esc — or leaving the field blank — reverts to the pre-edit tune
+  (a snapshot taken when editing began undoes the live changes) without
+  leaving the result screen. The input has no `[value]` binding on purpose:
+  its text is seeded imperatively in `startEditTuneField`, so a live re-apply
+  can't rewrite the caret away. The readout rows are `<div>`, not `<label>`
+  — a label would forward a click on the number to the range slider — and
+  the `<b>` carries a transparent border matching the input's box so
+  opening the editor causes no layout shift. The icon-only eye toggle (Material
   `visibility`/`visibility_off`, left of Reset) is the before/after
   comparison, Photoshop-preview style: eye on (default) = tuned photo, eye
   off = untuned original (icon slashed, tinted amber). Moving a slider or
