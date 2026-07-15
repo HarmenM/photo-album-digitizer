@@ -34,8 +34,12 @@
         }
       </div>
       <div class="drawer-actions">
-        <button (click)="fileInput.click()">＋ Add photos</button>
-        <button (click)="reset()">✕ Clear batch</button>
+        <button (click)="fileInput.click()">
+          <span class="material-symbols-outlined">add</span> Add photos
+        </button>
+        <button (click)="reset()">
+          <span class="material-symbols-outlined">clear_all</span> Clear batch
+        </button>
       </div>
     </aside>
   }
@@ -75,8 +79,8 @@
         <p class="big">Drop your JPG photos anywhere on this tab</p>
         <p class="muted">or click here to browse — you can add a whole batch</p>
         <p class="privacy">
-          🔒 This app is 100% privacy-friendly: all images and info are processed locally — nothing
-          ever leaves your computer.
+          <span class="material-symbols-outlined">lock</span> This app is 100% privacy-friendly: all
+          images and info are processed locally — nothing ever leaves your computer.
         </p>
       </div>
     </section>
@@ -272,15 +276,15 @@
       </div>
       <div class="meta-bar">
         <label title="Date">
-          📅
+          <span class="material-symbols-outlined">calendar_month</span>
           <input type="date" [value]="dateField()" (input)="onDateField($event)" />
         </label>
         <label title="Time">
-          🕐
+          <span class="material-symbols-outlined">schedule</span>
           <input type="time" step="1" [value]="timeField()" (input)="onTimeField($event)" />
         </label>
         <label class="grow">
-          📝 Description
+          <span class="material-symbols-outlined">notes</span> Description
           <input
             type="text"
             [value]="descriptionField()"
@@ -293,7 +297,7 @@
           [disabled]="!lastMeta()"
           title="Fill date, time and description from the last save"
         >
-          ↩ Use previous
+          <span class="material-symbols-outlined">undo</span> Use previous
         </button>
         <button
           class="mic"
@@ -301,7 +305,7 @@
           [disabled]="listening()"
           title="Say the description out loud"
         >
-          🎤
+          <span class="material-symbols-outlined">mic</span>
         </button>
         @if (voiceStatus(); as vs) {
           <span class="voice-chip">{{ vs }}</span>
@@ -381,7 +385,7 @@
     <!-- all done -->
     <section class="screen" [style.display]="mode() === 'done' ? '' : 'none'">
       <div class="done-box">
-        <h1>All photos processed 🎉</h1>
+        <h1>All photos processed <span class="material-symbols-outlined">celebration</span></h1>
         <p>{{ savedCount() }} saved</p>
         <p class="muted">Drop more photos anywhere to continue, or start a new batch.</p>
         @if (zipEntries().length; as n) {
@@ -431,12 +435,13 @@
             [disabled]="!scratchpad().length"
             title="Remove all scratchpad entries"
           >
-            ✕ Clear all
+            <span class="material-symbols-outlined">clear_all</span> Clear all
           </button>
         </div>
         <div class="scratch-buttons">
           <button (click)="dictate('scratchpad')" [disabled]="listening()">
-            🎤 {{ listening() ? 'Listening…' : 'Dictate a description' }}
+            <span class="material-symbols-outlined">mic</span>
+            {{ listening() ? 'Listening…' : 'Dictate a description' }}
           </button>
         </div>
         <div class="scratch-manual">
@@ -463,7 +468,7 @@
               (click)="applyScratch(e)"
               [title]="mode() === 'result' ? 'Use as the date' : ''"
             >
-              📅 {{ e.text }}
+              <span class="material-symbols-outlined">calendar_month</span> {{ e.text }}
               <button
                 class="x plusday"
                 (click)="applyScratch(e, 1); $event.stopPropagation()"
@@ -493,7 +498,7 @@
               (click)="applyScratch(e)"
               [title]="mode() === 'result' ? 'Use as the description' : ''"
             >
-              📝 {{ e.text }}
+              <span class="material-symbols-outlined">notes</span> {{ e.text }}
               <button
                 class="x"
                 (click)="removeScratch(e.id); $event.stopPropagation()"
@@ -506,6 +511,165 @@
             <span class="muted">none yet</span>
           }
         </div>
+        <!-- image tune: only on the preview (result) step; per rectified photo.
+             Sits below the scratchpad, pinned to the panel's bottom edge -->
+        @if (mode() === 'result') {
+          <section class="tune">
+            <div class="tune-head">
+              <h3>Tune image</h3>
+              <button
+                class="tune-preview"
+                [class.off]="!tunePreview()"
+                (click)="toggleTunePreview()"
+                [disabled]="tuneNeutral()"
+                [title]="
+                  (tunePreview()
+                    ? 'Showing the tuned photo — click to compare with the original'
+                    : 'Showing the original — click (or move a slider) to show the tuned photo') +
+                  ' (shortcut: B)'
+                "
+              >
+                <span class="material-symbols-outlined">{{
+                  tunePreview() ? 'visibility' : 'visibility_off'
+                }}</span>
+              </button>
+              <button
+                class="tune-reset"
+                (click)="resetTune()"
+                [disabled]="tuneNeutral()"
+                title="Reset levels, brightness and contrast for this photo"
+              >
+                <span class="material-symbols-outlined">restart_alt</span> Reset
+              </button>
+            </div>
+            <div class="tune-channels">
+              @for (c of tuneChannelIds; track c) {
+                <button
+                  [class.active]="tuneChannel() === c"
+                  (click)="setTuneChannel(c)"
+                  [title]="
+                    'Levels for the ' +
+                    (c === 'rgb' ? 'combined RGB' : c.toUpperCase()) +
+                    ' channel'
+                  "
+                >
+                  {{ c === 'rgb' ? 'RGB' : c.toUpperCase() }}
+                  @if (channelTuned(c)) {
+                    <span class="dot"></span>
+                  }
+                </button>
+              }
+            </div>
+            <canvas #histCanvas class="tune-hist"></canvas>
+            <label class="tune-slider">
+              <span
+                >Black point <b>{{ tuneLevels().black }}</b></span
+              >
+              <input
+                type="range"
+                min="0"
+                max="254"
+                step="1"
+                [value]="tuneLevels().black"
+                (input)="onTuneLevel('black', $event)"
+              />
+            </label>
+            <label class="tune-slider">
+              <span
+                >Midtones (gamma) <b>{{ tuneLevels().gamma.toFixed(2) }}</b></span
+              >
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                [value]="gammaSliderValue()"
+                (input)="onTuneLevel('gamma', $event)"
+              />
+            </label>
+            <label class="tune-slider">
+              <span
+                >White point <b>{{ tuneLevels().white }}</b></span
+              >
+              <input
+                type="range"
+                min="1"
+                max="255"
+                step="1"
+                [value]="tuneLevels().white"
+                (input)="onTuneLevel('white', $event)"
+              />
+            </label>
+            <label class="tune-slider">
+              <span
+                >Brightness <b>{{ tune().brightness }}</b></span
+              >
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                [value]="tune().brightness"
+                (input)="onTuneBC('brightness', $event)"
+              />
+            </label>
+            <label class="tune-slider">
+              <span
+                >Contrast <b>{{ tune().contrast }}</b></span
+              >
+              <input
+                type="range"
+                min="-100"
+                max="100"
+                step="1"
+                [value]="tune().contrast"
+                (input)="onTuneBC('contrast', $event)"
+              />
+            </label>
+            <div class="tune-actions">
+              <button
+                (click)="useLastTune()"
+                [disabled]="!lastTune()"
+                title="Apply the last configured tune settings (shortcut: U)"
+              >
+                <span class="material-symbols-outlined">undo</span> Use last settings
+              </button>
+              <button
+                (click)="openPresetModal()"
+                [disabled]="tuneNeutral()"
+                title="Save the current settings as a named preset"
+              >
+                <span class="material-symbols-outlined">add</span> Save preset
+              </button>
+            </div>
+            @if (tunePresets().length) {
+              <div class="entries tune-presets">
+                @for (p of tunePresets(); track p.id; let i = $index) {
+                  <span
+                    class="chip static apply"
+                    (click)="applyTunePreset(p)"
+                    [title]="
+                      'Apply this preset' +
+                      (i < 5 ? ' (shortcut: ' + presetKeyPrefix + (i + 1) + ')' : '')
+                    "
+                  >
+                    @if (i < 5) {
+                      <b class="preset-num">{{ i + 1 }}</b>
+                    }
+                    {{ p.name }}
+                    <button
+                      class="x"
+                      (click)="removeTunePreset(p.id, $event)"
+                      title="Remove this preset"
+                    >
+                      ×
+                    </button>
+                  </span>
+                }
+              </div>
+            }
+          </section>
+        }
       </aside>
     }
   }
@@ -561,6 +725,32 @@
             />
             Collect into ZIP — saves collect; download one ZIP whose files carry the photo dates
           </label>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- name-a-preset modal (Add preset in the tune section) -->
+  @if (presetModalOpen()) {
+    <div class="modal-backdrop" (click)="presetModalOpen.set(false)">
+      <div class="modal narrow" (click)="$event.stopPropagation()">
+        <div class="modal-head">
+          <h2>Save preset</h2>
+          <button class="x" (click)="presetModalOpen.set(false)" title="Close (shortcut: Esc)">
+            ×
+          </button>
+        </div>
+        <label>
+          Preset name — an existing name is overwritten
+          <input
+            #presetNameInput
+            type="text"
+            placeholder="e.g. faded album page"
+            (keydown.enter)="saveTunePreset(presetNameInput.value)"
+          />
+        </label>
+        <div class="modal-actions">
+          <button class="primary" (click)="saveTunePreset(presetNameInput.value)">Save</button>
         </div>
       </div>
     </div>

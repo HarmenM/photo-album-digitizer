@@ -172,6 +172,28 @@ policy (keep it):
   a manual corner drag** (the loupe exists for deliberate placement; snapping
   would fight it).
 
+## Image tune (result screen)
+
+`tune.ts` implements Photoshop-style adjustments for the rectified photos:
+input levels — black point, gamma (log-scaled slider, ±100 ↦ 0.1..10) and
+white point, for the RGB master and each channel — plus legacy
+brightness/contrast (additive brightness, 259-formula contrast). Everything
+composes into one 256-entry LUT per channel (channel levels → master levels
+→ brightness/contrast), applied in a single pass over the pixels.
+
+- Tuning is **per rectified photo** (`tunes[]` parallels `results[]`) and
+  **non-destructive**: `results[]` keeps the untuned originals; the tune is
+  baked into the visible result canvas, and since `save()` reads that canvas
+  via `toBlob`, the exported JPEG carries the tuned pixels with no extra
+  save-path code. Rotating a result re-bakes the tune; `backToEdit` discards
+  the tunes with the results.
+- The untuned pixels and per-channel histograms of the shown photo are
+  cached (`tuneSrc`/`histograms`, invalidated on photo switch/rotate) so a
+  slider drag only pays the LUT pass, coalesced to one per animation frame.
+- The histogram shows the **input** (untuned) pixels — that is what input
+  levels are read against; 'RGB' uses the same Rec. 601 luminance as the
+  detection threshold.
+
 ## Warping
 
 `warpPerspective` in `homography.ts` does the full-resolution bicubic warp in

@@ -30,6 +30,9 @@ Everything lives in `src/app/`:
   names). Pure functions.
 - `xmp.ts` — XMP sidecar builder (exiftool-style layout; currently unused)
   and the Europe/Amsterdam timezone-offset rule. Pure functions.
+- `tune.ts` — Photoshop-style image tuning for the result screen: input
+  levels (master RGB + per channel), legacy brightness/contrast, composed
+  into per-channel LUTs; channel histograms. Pure functions.
 - `zip.ts` — minimal STORE-only ZIP writer whose entries carry the photo
   dates as file timestamps (the "collect into ZIP" download style). Pure
   functions.

@@ -16,6 +16,16 @@ import {
 } from './corner-detect';
 import { embedExifJpeg, parseSpokenDate, readExifDate } from './exif';
 import { Point, computeHomography, insetQuad, sortCorners, warpPerspective } from './homography';
+import {
+  ChannelLevels,
+  Tune,
+  TuneChannel,
+  applyTune,
+  defaultTune,
+  isNeutralLevels,
+  isNeutralTune,
+  tuneHistogram,
+} from './tune';
 import { amsterdamOffset } from './xmp';
 import { ZipEntry, buildZip } from './zip';
 
@@ -36,6 +46,13 @@ interface QueueItem {
   status: ImageStatus;
   rotation: number; // clockwise quarter turns applied in the editor: 0/90/180/270
   quads?: Point[][]; // last photo rectangles; undefined = never visited (auto-detect)
+}
+
+/** A named tune saved for reuse (persisted in localStorage). */
+interface TunePreset {
+  id: number;
+  name: string;
+  tune: Tune;
 }
 
 interface ScratchEntry {
@@ -71,6 +88,7 @@ interface Recognition {
 const HIT_RADIUS_CSS_PX = 16;
 const SCRATCH_STORAGE_KEY = 'photo-album-digitizer.scratchpad';
 const SETTINGS_STORAGE_KEY = 'photo-album-digitizer.settings';
+const TUNE_PRESETS_STORAGE_KEY = 'photo-album-digitizer.tune-presets';
 // pre-rename keys ("Photo Rectifier"), still read as a fallback so existing
 // scratchpads and settings survive the rename
 const OLD_SCRATCH_STORAGE_KEY = 'photo-rectifier.scratchpad';
@@ -108,6 +126,35 @@ export class App {
   // per rectified photo: saved, closed without saving, or still pending —
   // the result screen only advances to the next image when none are pending
   protected readonly resultStatus = signal<('pending' | 'saved' | 'closed')[]>([]);
+  // --- image tune (result screen; per rectified photo, baked into the save) ---
+  protected readonly tune = signal<Tune>(defaultTune());
+  protected readonly tuneChannel = signal<TuneChannel>('rgb');
+  protected readonly tuneChannelIds: TuneChannel[] = ['rgb', 'r', 'g', 'b'];
+  protected readonly tuneLevels = computed(() => this.tune().levels[this.tuneChannel()]);
+  protected readonly tuneNeutral = computed(() => isNeutralTune(this.tune()));
+  // before/after comparison, Photoshop-preview style: eye on (default) shows
+  // the tuned photo, eye off the untuned original (save() re-bakes first
+  // when off — the canvas is what gets exported)
+  protected readonly tunePreview = signal(true);
+  // the last non-neutral tune configured on any photo, for "use previous"
+  // (in-memory, like the metadata bar's lastMeta; cleared on batch reset)
+  protected readonly lastTune = signal<Tune | null>(null);
+  // named tunes for reuse across sessions (persisted in localStorage)
+  protected readonly tunePresets = signal<TunePreset[]>([]);
+  protected readonly presetModalOpen = signal(false);
+  private presetId = 0;
+  // the gamma slider is log-scaled: ±100 ↦ gamma 0.1..10, 0 = neutral
+  protected readonly gammaSliderValue = computed(() =>
+    Math.round(Math.log10(this.tuneLevels().gamma) * 100),
+  );
+  private tunes: Tune[] = []; // parallel to results
+  // untuned pixels + per-channel histograms of the shown photo, cached so
+  // slider drags only pay the LUT pass (invalidated on photo switch/rotate)
+  private tuneSrc: ImageData | null = null;
+  private tuneDst: ImageData | null = null;
+  private histograms = new Map<TuneChannel, Uint32Array>();
+  private tuneRaf = 0;
+
   // metadata of the last save with actual input, for the "use previous" button
   protected readonly lastMeta = signal<{ date: string; time: string; description: string } | null>(
     null,
@@ -193,6 +240,10 @@ export class App {
   private readonly resultCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('resultCanvas');
   private readonly resultHost = viewChild.required<ElementRef<HTMLDivElement>>('resultHost');
   private readonly loupeCanvas = viewChild.required<ElementRef<HTMLCanvasElement>>('loupeCanvas');
+  // not .required: the tune panel exists only on the result screen (and not
+  // while the side panel is collapsed)
+  private readonly histCanvas = viewChild<ElementRef<HTMLCanvasElement>>('histCanvas');
+  private readonly presetNameInput = viewChild<ElementRef<HTMLInputElement>>('presetNameInput');
 
   private image: ImageBitmap | null = null;
   private baseName = 'photo';
@@ -272,6 +323,20 @@ export class App {
           filenameSuffix: this.filenameSuffix(),
         }),
       );
+    });
+    // tune presets survive reloads too
+    try {
+      const raw = localStorage.getItem(TUNE_PRESETS_STORAGE_KEY);
+      if (raw) {
+        const presets = (JSON.parse(raw) as TunePreset[]).filter(isValidTunePreset);
+        this.tunePresets.set(presets);
+        this.presetId = presets.reduce((m, p) => Math.max(m, p.id), 0);
+      }
+    } catch {
+      // corrupted storage — start without presets
+    }
+    effect(() => {
+      localStorage.setItem(TUNE_PRESETS_STORAGE_KEY, JSON.stringify(this.tunePresets()));
     });
     // The browser Back button leaves the result screen like Esc does:
     // entering the result pushes a history entry (so Back has something to
@@ -764,6 +829,8 @@ export class App {
 
   protected toggleScratchpad(): void {
     this.scratchCollapsed.update((c) => !c);
+    // expanding brings the tune histogram (back) into the DOM
+    if (!this.scratchCollapsed()) this.scheduleHistogramDraw();
   }
 
   /**
@@ -795,11 +862,215 @@ export class App {
     }
   }
 
+  // --- image tune (result screen) ---------------------------------------------
+
+  /** Non-neutral levels on a channel: shown as a dot on its selector button. */
+  protected channelTuned(c: TuneChannel): boolean {
+    return !isNeutralLevels(this.tune().levels[c]);
+  }
+
+  protected setTuneChannel(c: TuneChannel): void {
+    this.tuneChannel.set(c);
+    this.scheduleHistogramDraw();
+  }
+
+  protected onTuneLevel(part: 'black' | 'gamma' | 'white', ev: Event): void {
+    const input = ev.target as HTMLInputElement;
+    const raw = +input.value;
+    const ch = this.tuneChannel();
+    this.updateTune((t) => {
+      const cur = t.levels[ch];
+      let l: ChannelLevels;
+      if (part === 'gamma') {
+        l = { ...cur, gamma: Math.round(Math.pow(10, raw / 100) * 100) / 100 };
+      } else if (part === 'black') {
+        l = { ...cur, black: Math.min(raw, cur.white - 1) };
+      } else {
+        l = { ...cur, white: Math.max(raw, cur.black + 1) };
+      }
+      // black and white clamp against each other; push the thumb back too —
+      // the [value] binding alone won't move it when the clamped value is
+      // unchanged from the previous state
+      if (part !== 'gamma' && l[part] !== raw) input.value = String(l[part]);
+      return { ...t, levels: { ...t.levels, [ch]: l } };
+    });
+  }
+
+  protected onTuneBC(part: 'brightness' | 'contrast', ev: Event): void {
+    const v = +(ev.target as HTMLInputElement).value;
+    this.updateTune((t) => ({ ...t, [part]: v }));
+  }
+
+  protected resetTune(): void {
+    this.updateTune(() => defaultTune());
+  }
+
+  protected toggleTunePreview(): void {
+    this.tunePreview.update((v) => !v);
+    this.applyTuneNow();
+  }
+
+  /** Copy the last configured (non-neutral) tune onto the current photo. */
+  protected useLastTune(): void {
+    const t = this.lastTune();
+    if (t) this.updateTune(() => structuredClone(t));
+  }
+
+  protected applyTunePreset(p: TunePreset): void {
+    this.updateTune(() => structuredClone(p.tune));
+  }
+
+  protected removeTunePreset(id: number, ev: Event): void {
+    ev.stopPropagation();
+    this.tunePresets.update((list) => list.filter((p) => p.id !== id));
+  }
+
+  protected openPresetModal(): void {
+    this.presetModalOpen.set(true);
+    // focus after the modal has rendered
+    requestAnimationFrame(() => this.presetNameInput()?.nativeElement.focus());
+  }
+
+  /** Save the current tune under a name; the same name overwrites its preset. */
+  protected saveTunePreset(raw: string): void {
+    const name = raw.trim().slice(0, 40);
+    if (!name) return;
+    const tune = structuredClone(this.tune());
+    this.tunePresets.update((list) =>
+      list.some((p) => p.name === name)
+        ? list.map((p) => (p.name === name ? { ...p, tune } : p))
+        : [...list, { id: ++this.presetId, name, tune }],
+    );
+    this.presetModalOpen.set(false);
+  }
+
+  /** Update the shown photo's tune, keep the per-photo store in sync, redraw. */
+  private updateTune(patch: (t: Tune) => Tune): void {
+    if (this.mode() !== 'result') return;
+    const t = patch(this.tune());
+    this.tune.set(t);
+    this.tunes[this.resultIndex()] = t;
+    // remember the last real configuration for "use previous" on later
+    // photos; a reset to neutral does not forget it
+    if (!isNeutralTune(t)) this.lastTune.set(t);
+    // a slider moved while the eye is off would look dead — turn it back on
+    this.tunePreview.set(true);
+    this.applyTuneSoon();
+  }
+
+  /** Coalesce slider drags to one LUT pass per frame. */
+  private applyTuneSoon(): void {
+    if (this.tuneRaf) return;
+    this.tuneRaf = requestAnimationFrame(() => {
+      this.tuneRaf = 0;
+      this.applyTuneNow();
+    });
+  }
+
+  /**
+   * Bake the current tune into the visible result canvas. Saving reads that
+   * canvas (toBlob), so the exported JPEG carries the tuned pixels without
+   * any extra save-path work; results[] keeps the untuned original so
+   * adjustments stay non-destructive.
+   */
+  private applyTuneNow(): void {
+    if (this.mode() !== 'result') return;
+    const idx = this.resultIndex();
+    const src = this.results[idx];
+    if (!src) return;
+    const rc = this.resultCanvas().nativeElement;
+    const ctx = rc.getContext('2d')!;
+    const t = this.tune();
+    if (!this.tunePreview()) {
+      ctx.drawImage(src, 0, 0);
+      return; // eye off: the strip thumb keeps showing the tuned pixels
+    }
+    if (isNeutralTune(t)) {
+      ctx.drawImage(src, 0, 0);
+    } else {
+      const data = this.ensureTuneSrc();
+      if (!data) return;
+      if (
+        !this.tuneDst ||
+        this.tuneDst.width !== data.width ||
+        this.tuneDst.height !== data.height
+      ) {
+        this.tuneDst = new ImageData(data.width, data.height);
+      }
+      applyTune(data, this.tuneDst, t);
+      ctx.putImageData(this.tuneDst, 0, 0);
+    }
+    // keep the strip thumbnail in sync with the tuned pixels
+    if (this.resultCount() > 1) {
+      this.resultThumbs.update((th) => th.map((v, i) => (i === idx ? resultThumb(rc) : v)));
+    }
+  }
+
+  private ensureTuneSrc(): ImageData | null {
+    const src = this.results[this.resultIndex()];
+    if (!src) return null;
+    if (!this.tuneSrc) {
+      this.tuneSrc = src
+        .getContext('2d', { willReadFrequently: true })!
+        .getImageData(0, 0, src.width, src.height);
+    }
+    return this.tuneSrc;
+  }
+
+  /** Photo switched or rotated: cached pixels and histograms are stale. */
+  private invalidateTuneCache(): void {
+    this.tuneSrc = null;
+    this.tuneDst = null;
+    this.histograms.clear();
+    if (this.tuneRaf) {
+      cancelAnimationFrame(this.tuneRaf);
+      this.tuneRaf = 0;
+    }
+  }
+
+  /** Draw after the next render — the canvas may not be in the DOM yet. */
+  private scheduleHistogramDraw(): void {
+    requestAnimationFrame(() => this.drawHistogram());
+  }
+
+  private drawHistogram(): void {
+    const el = this.histCanvas()?.nativeElement;
+    if (!el || this.mode() !== 'result') return;
+    const ch = this.tuneChannel();
+    let bins = this.histograms.get(ch);
+    if (!bins) {
+      const src = this.ensureTuneSrc();
+      if (!src) return;
+      bins = tuneHistogram(src, ch);
+      this.histograms.set(ch, bins);
+    }
+    // one backing-store column per bin; CSS stretches it to the panel width
+    const W = 256;
+    const H = 64;
+    if (el.width !== W || el.height !== H) {
+      el.width = W;
+      el.height = H;
+    }
+    const ctx = el.getContext('2d')!;
+    ctx.clearRect(0, 0, W, H);
+    let max = 1;
+    for (let i = 0; i < 256; i++) if (bins[i] > max) max = bins[i];
+    ctx.fillStyle =
+      ch === 'r' ? '#f87171' : ch === 'g' ? '#4ade80' : ch === 'b' ? '#60a5fa' : '#94a3b8';
+    for (let x = 0; x < 256; x++) {
+      const h = Math.round((bins[x] / max) * H);
+      if (h) ctx.fillRect(x, H - h, 1, h);
+    }
+  }
+
   protected backToEdit(): void {
     this.results = []; // discard pending rectified photos
     this.resultCount.set(0);
     this.resultThumbs.set([]);
     this.resultStatus.set([]);
+    this.tunes = [];
+    this.tune.set(defaultTune());
+    this.invalidateTuneCache();
     this.resetZoom();
     this.mode.set('edit');
     requestAnimationFrame(() => this.layoutEditCanvas());
@@ -815,12 +1086,18 @@ export class App {
 
   /** Platform-aware label for the confirm shortcut, used in tooltips. */
   protected readonly confirmKey = /mac/i.test(navigator.userAgent) ? '⌘+Enter' : 'Alt+Enter';
+  /** Platform-aware prefix for the preset shortcuts (⌘1 / Ctrl+1). */
+  protected readonly presetKeyPrefix = /mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl+';
 
   @HostListener('window:keydown', ['$event'])
   protected onKeyDown(ev: KeyboardEvent): void {
-    // the settings modal and the collection page capture Escape first
+    // the modals and the collection page capture Escape first
     if (ev.key === 'Escape' && this.settingsOpen()) {
       this.settingsOpen.set(false);
+      return;
+    }
+    if (ev.key === 'Escape' && this.presetModalOpen()) {
+      this.presetModalOpen.set(false);
       return;
     }
     if (ev.key === 'Escape' && this.mode() === 'collection') {
@@ -853,6 +1130,17 @@ export class App {
         this.applyZoom(1);
         return;
       }
+    }
+
+    // Ctrl/Cmd+1..5 apply the first five tune presets on the result screen;
+    // checked before the input guard so they work while typing metadata
+    if ((ev.metaKey || ev.ctrlKey) && this.mode() === 'result' && ev.key >= '1' && ev.key <= '5') {
+      const preset = this.tunePresets()[+ev.key - 1];
+      if (preset) {
+        ev.preventDefault();
+        this.applyTunePreset(preset);
+      }
+      return;
     }
 
     const target = ev.target as HTMLElement | null;
@@ -915,6 +1203,11 @@ export class App {
     else if (key === 'c' && this.mode() === 'edit') this.correctBoundaries();
     else if ((ev.key === 'Delete' || ev.key === 'Backspace') && this.mode() === 'edit') {
       this.deleteActive();
+    } else if (this.mode() === 'result') {
+      // tune panel: B = before/after eye (pointless on a neutral tune —
+      // button disabled), U = use last settings
+      if (key === 'b' && !this.tuneNeutral()) this.toggleTunePreview();
+      else if (key === 'u') this.useLastTune();
     }
   }
 
@@ -997,6 +1290,10 @@ export class App {
     rc.width = tmp.width;
     rc.height = tmp.height;
     rc.getContext('2d')!.drawImage(tmp, 0, 0);
+    // the rotation swapped the cached tune pixels' dimensions; re-bake the
+    // tune (values are orientation-independent, so the histogram is not stale)
+    this.invalidateTuneCache();
+    if (!this.tuneNeutral()) this.applyTuneNow();
     this.outSize.set({ w: tmp.width, h: tmp.height });
     this.layoutResultCanvas();
   }
@@ -1574,6 +1871,7 @@ export class App {
       // explicit lambda: map would pass the index as resultThumb's height
       this.resultThumbs.set(this.results.map((c) => resultThumb(c)));
       this.resultStatus.set(this.results.map(() => 'pending'));
+      this.tunes = this.results.map(() => defaultTune());
       this.resultIndex.set(0);
       this.mode.set('result');
       this.showResult(0);
@@ -1599,6 +1897,12 @@ export class App {
     rc.width = src.width;
     rc.height = src.height;
     rc.getContext('2d')!.drawImage(src, 0, 0);
+    // each rectified photo keeps its own tune across strip navigation
+    this.invalidateTuneCache();
+    this.tunePreview.set(true);
+    this.tune.set(this.tunes[i] ?? defaultTune());
+    if (!this.tuneNeutral()) this.applyTuneNow();
+    this.scheduleHistogramDraw();
     this.outSize.set({ w: src.width, h: src.height });
     this.dateField.set(''); // date starts empty; the EXIF chip can fill it on demand
     this.timeField.set(DEFAULT_TIME);
@@ -1634,6 +1938,12 @@ export class App {
     const idx = this.resultIndex();
     const suffix = this.resultCount() > 1 ? `-${idx + 1}` : '';
     const canvas = this.resultCanvas().nativeElement;
+    // eye off means the UNTUNED original is on the canvas — re-bake the
+    // tune first, or the export would silently drop it
+    if (!this.tunePreview()) {
+      this.tunePreview.set(true);
+      this.applyTuneNow();
+    }
     canvas.toBlob(
       (blob) => {
         if (!blob) {
@@ -1807,6 +2117,10 @@ export class App {
     this.resultCount.set(0);
     this.resultThumbs.set([]);
     this.resultStatus.set([]);
+    this.tunes = [];
+    this.tune.set(defaultTune());
+    this.lastTune.set(null); // presets are persisted and survive on purpose
+    this.invalidateTuneCache();
     this.lastMeta.set(null);
     this.zipEntries.set([]);
     this.outSize.set(null);
@@ -1854,6 +2168,28 @@ function addDaysIso(iso: string, days: number): string {
 /** Keep a filename suffix safe: no path separators or forbidden characters. */
 function sanitizeSuffix(raw: string): string {
   return raw.replace(/[/\\:*?"<>|]/g, '').slice(0, 40);
+}
+
+/** Loose shape check for tune presets loaded from localStorage. */
+function isValidTunePreset(p: TunePreset): boolean {
+  const lv = (l: ChannelLevels | undefined) =>
+    !!l &&
+    typeof l.black === 'number' &&
+    typeof l.gamma === 'number' &&
+    typeof l.white === 'number';
+  return (
+    !!p &&
+    typeof p.id === 'number' &&
+    typeof p.name === 'string' &&
+    !!p.tune &&
+    typeof p.tune.brightness === 'number' &&
+    typeof p.tune.contrast === 'number' &&
+    !!p.tune.levels &&
+    lv(p.tune.levels.rgb) &&
+    lv(p.tune.levels.r) &&
+    lv(p.tune.levels.g) &&
+    lv(p.tune.levels.b)
+  );
 }
 
 /** ISO date + HH:MM[:SS] as a local-time Date. */

@@ -1,4 +1,7 @@
 # Photo Album Digitizer
+## Open the App
+Check out the [The live Photo Album Digitizer app](https://harmenm.github.io/photo-album-digitizer/) 🖼️.
+
 ## Why this? And how I use it myself
 I have a whole stack of photo albums I wanted to digitize. The albums hold
 several photos per page, with descriptions and dates written next to them. I
@@ -30,6 +33,12 @@ browser — your photos never leave your machine.
   flat and rectangular, without losing any sharpness from the original
   shot; rotate pages in quarter turns and the photo numbering follows
   automatically.
+- **Photoshop-style tuning** — per-photo levels (RGB master and per
+  channel, with a live histogram), brightness and contrast in the side
+  panel of the preview step, with a before/after comparison toggle;
+  non-destructive until saved, when the adjustments are baked into the
+  exported JPEG. Reapply the last settings with one click, or save named
+  presets (kept across sessions) and apply them from chips.
 - **Per-photo metadata** — date, time, and description per photo; an
   always-visible scratchpad collects dates/descriptions from context pages
   and offers them as one-click chips; voice dictation for
@@ -54,6 +63,9 @@ browser — your photos never leave your machine.
 | `Esc` | editor | Cancel the rectangle being marked |
 | `←` / `→` | editor | Previous / next image in the queue |
 | `←` / `→` | preview | Previous / next rectified photo |
+| `B` | preview | Before/after: toggle the tune preview eye |
+| `U` | preview | Apply the last configured tune settings |
+| `Ctrl/⌘ + 1`…`5` | preview | Apply tune preset 1–5 (the number shown on the chip) |
 | `Alt/⌘ + Enter` | editor & preview | Confirm the current step: Apply, or Save & next (also works while typing) |
 | `Esc` / `Backspace` / browser Back | preview | Back to the corner editor (in an input, the first `Esc` leaves the field, the second leaves the screen) |
 | `Esc` | settings / ZIP collection | Close the dialog / go back |

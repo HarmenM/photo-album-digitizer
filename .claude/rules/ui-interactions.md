@@ -16,6 +16,12 @@ you change a binding):
   rectangles + detect afresh, same snap + 5 px shrink flow).
 - `←` / `→` previous/next photo (edit mode); on the result screen they step
   through the rectified photos instead.
+- Result screen, tune panel: `B` toggles the before/after eye (a no-op on
+  a neutral tune, matching the button's disabled state), `U` applies the
+  last configured tune, and `Ctrl/⌘ + 1`…`5` applies the first five
+  presets — those digits work while an input is focused (like the confirm
+  shortcut) and each chip shows its number so the shortcut is
+  discoverable. Save preset deliberately has no shortcut.
 - `Alt/⌘ + Enter` confirms the current phase (Apply / Save & next)
   and must keep working **while an input is focused**.
 - `Esc` cancels an in-progress rectangle in the editor, and returns from
@@ -29,6 +35,11 @@ you change a binding):
 - `Ctrl/⌘ +/−/0` zooms previews; pinch arrives as ctrl+wheel; plain scroll pans.
 
 Interaction invariants:
+
+- Icons are Google **Material Symbols** (self-hosted font, see styles.css),
+  never emojis — emojis in labels/buttons have been deliberately replaced
+  app-wide. Plain typographic glyphs (×, ✓ badges, ‹ › chevrons, ←/→ in
+  tooltip texts) are fine.
 
 - Edit-toolbar layout (groups separated by vertical dividers): rotate
   left/right (icon-only) | Mark another photo · Correct boundaries | Shrink
@@ -89,6 +100,27 @@ Interaction invariants:
 - Dropping (or picking) new files opens the first newly added image right
   away, from any screen except mid-warp (`processing`) — current rectangles
   are stashed per queue item, so nothing is lost by the jump.
+- The side panel gains a **Tune image** section on the result screen only,
+  below the scratchpad entries and pinned to the panel's bottom edge
+  (levels with channel selector RGB/R/G/B + input histogram, brightness,
+  contrast — see image-pipeline.md): per rectified photo, kept while
+  stepping through the strip, baked into the save. Channel buttons carry a
+  small amber dot when that channel's levels are non-neutral; ↺ Reset
+  restores the current photo to neutral. The icon-only eye toggle (Material
+  `visibility`/`visibility_off`, left of Reset) is the before/after
+  comparison, Photoshop-preview style: eye on (default) = tuned photo, eye
+  off = untuned original (icon slashed, tinted amber). Moving a slider or
+  switching photos turns the eye back on, and `save()` re-bakes the tune
+  first when the eye is off (the canvas is what gets exported; without
+  that the save would silently drop the tune). Below the sliders:
+  **Use last settings** (applies the last non-neutral tune configured on
+  any photo; in-memory like the metadata bar's "use previous", cleared on
+  batch reset) and **Save preset** (small modal asks a name; saving under
+  an existing name overwrites it). Presets persist in localStorage
+  (`photo-album-digitizer.tune-presets`) and render as clickable chips
+  with a × remove button — apply and remove, nothing more. Collapsing the panel hides the
+  section along with the scratchpad — it must never move to a separate
+  page or modal.
 - The scratchpad is an always-visible right side panel on the editor and
   result screens (no separate page or mode). Entries can be added anytime
   (typed or dictated); on the result screen the chips become clickable and
