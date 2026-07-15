@@ -32,7 +32,7 @@ browser — your photos never leave your machine.
   automatically.
 - **Per-photo metadata** — date, time, and description per photo; an
   always-visible scratchpad collects dates/descriptions from context pages
-  and offers them as one-click chips voice dictation for
+  and offers them as one-click chips; voice dictation for
   descriptions (Chrome).
 - **EXIF-embedded JPEG export** — `DateTimeOriginal` (with CET/CEST
   timezone offset) and the description are embedded in the file itself; JPG
@@ -73,6 +73,16 @@ Every push to `main` is built and published to GitHub Pages by
 Built with Angular (zoneless, signals) and no image or metadata libraries —
 the photo detection, perspective warp, EXIF writing, and ZIP packing are
 hand-rolled pure TypeScript modules in `src/app/`.
+
+## How this was built
+
+This little project was vibe-coded together: all the code was written in
+conversation with [Claude Code](https://claude.com/claude-code), feature by
+feature. My side of the loop was describing the workflow I wanted, trying
+every change on real album pages, and sending back whatever didn't hold up —
+which is also how the detection pipeline got its tuning: threshold levels,
+Hough constraints, and snapping behavior were all validated against actual
+photographed pages rather than designed up front.
 
 ## License
 
