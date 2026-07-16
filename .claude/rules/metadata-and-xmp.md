@@ -10,10 +10,18 @@
 - **Settings** (cogwheel in the toolbars, persisted in `localStorage` under
   `photo-album-digitizer.settings`): JPG quality (0.5–1), the filename suffix
   (default `-result`, sanitized of path/forbidden characters, may be empty),
-  and the download style — `single` (every save downloads its JPG directly)
+  the download style — `single` (every save downloads its JPG directly)
   or `zip` (saves collect into the batch ZIP; nothing downloads until the
-  ZIP button). In zip mode a re-processed photo never overwrites a collected
-  one: `uniqueZipName` appends `-2`, `-3`, … before `.jpg`.
+  ZIP button) — and a **require-date** toggle (`dateRequired`, default off).
+  The persisted settings JSON also carries `defaultPresetId` (see the tune
+  presets in ui-interactions.md). In zip mode a re-processed photo never
+  overwrites a collected one: `uniqueZipName` appends `-2`, `-3`, … before
+  `.jpg`.
+- **Require date**: when the setting is on, `save()` refuses a photo whose
+  date field is empty (the silent EXIF fallback does not satisfy it) and sets
+  `dateError`, shown as a red-outlined date field + "A date is required" in
+  the metadata bar. The error clears as soon as a date is typed or another
+  photo is shown.
 - The XMP sidecar this replaced still exists as `buildXmpSidecar` (`xmp.ts`,
   exiftool-style one-`rdf:Description`-per-namespace layout) — currently
   unused, kept for a possible embedded-XMP or sidecar-compat option.

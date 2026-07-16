@@ -275,9 +275,12 @@
         </button>
       </div>
       <div class="meta-bar">
-        <label title="Date">
+        <label title="Date" class="date-field" [class.invalid]="dateError()">
           <span class="material-symbols-outlined">calendar_month</span>
           <input type="date" [value]="dateField()" (input)="onDateField($event)" />
+          @if (dateError()) {
+            <span class="field-error" role="alert">A date is required</span>
+          }
         </label>
         <label title="Time">
           <span class="material-symbols-outlined">schedule</span>
@@ -516,7 +519,7 @@
         @if (mode() === 'result') {
           <section class="tune">
             <div class="tune-head">
-              <h3>Tune image</h3>
+              <h3>Color correction</h3>
               <button
                 class="tune-preview"
                 [class.off]="!tunePreview()"
@@ -649,6 +652,8 @@
                 (input)="onTuneLevel('white', $event)"
               />
             </div>
+            <!-- levels above, legacy brightness/contrast below — separate adjustments -->
+            <hr class="tune-divider" />
             <div class="tune-slider">
               <span
                 >Brightness
@@ -732,6 +737,18 @@
                       (i < 5 ? ' (shortcut: ' + presetKeyPrefix + (i + 1) + ')' : '')
                     "
                   >
+                    <button
+                      class="preset-star"
+                      [class.on]="defaultPresetId() === p.id"
+                      (click)="toggleDefaultPreset(p, $event)"
+                      [title]="
+                        defaultPresetId() === p.id
+                          ? 'Default preset for every photo — click to clear'
+                          : 'Make this the default preset applied to every photo'
+                      "
+                    >
+                      <span class="material-symbols-outlined">star</span>
+                    </button>
                     @if (i < 5) {
                       <b class="preset-num">{{ i + 1 }}</b>
                     }
@@ -783,6 +800,14 @@
             (change)="onSuffix($event)"
             placeholder="e.g. -result (may be empty)"
           />
+        </label>
+        <label class="checkbox-row">
+          <input
+            type="checkbox"
+            [checked]="dateRequired()"
+            (change)="dateRequired.set($any($event.target).checked)"
+          />
+          Require a date — refuse to save a photo whose date field is empty
         </label>
         <div class="setting-label">Download style</div>
         <div class="radio-group">

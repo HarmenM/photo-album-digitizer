@@ -192,6 +192,14 @@ export class App {
   protected readonly downloadStyle = signal<DownloadStyle>('single');
   // appended to the source name in saved file names (may be empty)
   protected readonly filenameSuffix = signal(DEFAULT_FILENAME_SUFFIX);
+  // when set, a save with an empty date field is refused (see save())
+  protected readonly dateRequired = signal(false);
+  // set by a failed required-date save; shown next to the date field, cleared
+  // as soon as a date is entered or another photo is shown
+  protected readonly dateError = signal(false);
+  // id of the tune preset used as the default for every rectified photo, or
+  // null for none; the filled star in the preset list marks it
+  protected readonly defaultPresetId = signal<number | null>(null);
 
   // progressive boundary correction (see SNAP_RADII): the escalation level
   // of the last snap; > 0 shows as the L/XL badge on the button
@@ -234,11 +242,17 @@ export class App {
 
   // shared scratchpad, filled from "use info" pages
   protected readonly scratchpad = signal<ScratchEntry[]>([]);
+  // newest first: ids are monotonic (restored from the persisted max on load),
+  // so sorting by id also orders entries from sessions before this rule
   protected readonly scratchDates = computed(() =>
-    this.scratchpad().filter((e) => e.kind === 'date'),
+    this.scratchpad()
+      .filter((e) => e.kind === 'date')
+      .sort((a, b) => b.id - a.id),
   );
   protected readonly scratchDescriptions = computed(() =>
-    this.scratchpad().filter((e) => e.kind === 'description'),
+    this.scratchpad()
+      .filter((e) => e.kind === 'description')
+      .sort((a, b) => b.id - a.id),
   );
   // collapsed = slim rail only; the panel stays on screen so expanding is one click
   protected readonly scratchCollapsed = signal(false);
@@ -338,6 +352,8 @@ export class App {
           jpegQuality?: unknown;
           downloadStyle?: unknown;
           filenameSuffix?: unknown;
+          dateRequired?: unknown;
+          defaultPresetId?: unknown;
         };
         if (typeof s.jpegQuality === 'number' && s.jpegQuality >= 0.5 && s.jpegQuality <= 1) {
           this.jpegQuality.set(s.jpegQuality);
@@ -347,6 +363,12 @@ export class App {
         }
         if (typeof s.filenameSuffix === 'string' && s.filenameSuffix.length <= 40) {
           this.filenameSuffix.set(sanitizeSuffix(s.filenameSuffix));
+        }
+        if (typeof s.dateRequired === 'boolean') {
+          this.dateRequired.set(s.dateRequired);
+        }
+        if (typeof s.defaultPresetId === 'number') {
+          this.defaultPresetId.set(s.defaultPresetId);
         }
       }
     } catch {
@@ -359,6 +381,8 @@ export class App {
           jpegQuality: this.jpegQuality(),
           downloadStyle: this.downloadStyle(),
           filenameSuffix: this.filenameSuffix(),
+          dateRequired: this.dateRequired(),
+          defaultPresetId: this.defaultPresetId(),
         }),
       );
     });
@@ -369,6 +393,10 @@ export class App {
         const presets = (JSON.parse(raw) as TunePreset[]).filter(isValidTunePreset);
         this.tunePresets.set(presets);
         this.presetId = presets.reduce((m, p) => Math.max(m, p.id), 0);
+        // drop a stale default that no longer points at an existing preset
+        if (!presets.some((p) => p.id === this.defaultPresetId())) {
+          this.defaultPresetId.set(null);
+        }
       }
     } catch {
       // corrupted storage — start without presets
@@ -1177,9 +1205,39 @@ export class App {
     this.updateTune(() => structuredClone(p.tune));
   }
 
+  /** The tune a freshly rectified photo starts from: the default preset, else neutral. */
+  private defaultTuneForNewPhoto(): Tune {
+    const id = this.defaultPresetId();
+    const p = id != null ? this.tunePresets().find((x) => x.id === id) : undefined;
+    return p ? structuredClone(p.tune) : defaultTune();
+  }
+
   protected removeTunePreset(id: number, ev: Event): void {
     ev.stopPropagation();
     this.tunePresets.update((list) => list.filter((p) => p.id !== id));
+    if (this.defaultPresetId() === id) this.defaultPresetId.set(null);
+  }
+
+  /**
+   * Toggle a preset as the default tune applied to every rectified photo.
+   * Turning it on stamps the preset onto all currently loaded photos too, so
+   * the change is visible immediately (not only on the next Apply); turning it
+   * off (a second click, or clicking another default) leaves current tunes be.
+   */
+  protected toggleDefaultPreset(p: TunePreset, ev: Event): void {
+    ev.stopPropagation();
+    if (this.defaultPresetId() === p.id) {
+      this.defaultPresetId.set(null);
+      return;
+    }
+    this.defaultPresetId.set(p.id);
+    // apply to every loaded rectified photo and refresh the shown one
+    if (this.mode() === 'result') {
+      this.tunes = this.tunes.map(() => structuredClone(p.tune));
+      this.tune.set(structuredClone(p.tune));
+      this.tunePreview.set(true);
+      this.applyTuneNow();
+    }
   }
 
   protected openPresetModal(): void {
@@ -2132,7 +2190,9 @@ export class App {
       // explicit lambda: map would pass the index as resultThumb's height
       this.resultThumbs.set(this.results.map((c) => resultThumb(c)));
       this.resultStatus.set(this.results.map(() => 'pending'));
-      this.tunes = this.results.map(() => defaultTune());
+      // new photos start from the default preset's tune if one is set
+      const base = this.defaultTuneForNewPhoto();
+      this.tunes = this.results.map(() => structuredClone(base));
       this.resultIndex.set(0);
       this.mode.set('result');
       this.showResult(0);
@@ -2167,6 +2227,7 @@ export class App {
     this.scheduleHistogramDraw();
     this.outSize.set({ w: src.width, h: src.height });
     this.dateField.set(''); // date starts empty; the EXIF chip can fill it on demand
+    this.dateError.set(false);
     this.timeField.set(DEFAULT_TIME);
     this.descriptionField.set('');
     this.resetZoom();
@@ -2177,6 +2238,7 @@ export class App {
 
   protected onDateField(ev: Event): void {
     this.dateField.set((ev.target as HTMLInputElement).value);
+    if (this.dateField()) this.dateError.set(false);
   }
 
   protected onTimeField(ev: Event): void {
@@ -2197,6 +2259,11 @@ export class App {
    * previous" memory, so it is reusable on later photos.
    */
   protected save(): void {
+    // a required date must be entered by hand — the EXIF fallback does not count
+    if (this.dateRequired() && !this.dateField()) {
+      this.dateError.set(true);
+      return;
+    }
     const idx = this.resultIndex();
     const suffix = this.resultCount() > 1 ? `-${idx + 1}` : '';
     const canvas = this.resultCanvas().nativeElement;

@@ -100,9 +100,11 @@ Interaction invariants:
 - Dropping (or picking) new files opens the first newly added image right
   away, from any screen except mid-warp (`processing`) — current rectangles
   are stashed per queue item, so nothing is lost by the jump.
-- The side panel gains a **Tune image** section on the result screen only,
+- The side panel gains a **Color correction** section (internally still "the
+  tune": `tune.ts`, `.tune-*` classes) on the result screen only,
   below the scratchpad entries and pinned to the panel's bottom edge
-  (levels with channel selector RGB/R/G/B + input histogram, brightness,
+  (levels with channel selector RGB/R/G/B + input histogram, then — behind a
+  divider line marking them as a separate adjustment — brightness and
   contrast — see image-pipeline.md): per rectified photo, kept while
   stepping through the strip, baked into the save. Channel buttons carry a
   small amber dot when that channel's levels are non-neutral; ↺ Reset
@@ -132,9 +134,15 @@ Interaction invariants:
   batch reset) and **Save preset** (small modal asks a name; saving under
   an existing name overwrites it). Presets persist in localStorage
   (`photo-album-digitizer.tune-presets`) and render as clickable chips
-  with a × remove button — apply and remove, nothing more. Collapsing the panel hides the
-  section along with the scratchpad — it must never move to a separate
-  page or modal.
+  with a star toggle and a × remove button. The star (outlined `star`, filled
+  amber when on) marks a preset as the **default tune** for every rectified
+  photo (`defaultPresetId`, persisted in the settings JSON): clicking it makes
+  that preset the default and stamps it onto all currently loaded results at
+  once (and every future Apply seeds new photos from it via
+  `defaultTuneForNewPhoto`); a second click — or starring another preset —
+  clears it. Removing the default preset (or a stale id at load) resets it to
+  none. Collapsing the panel hides the section along with the scratchpad — it
+  must never move to a separate page or modal.
 - The scratchpad is an always-visible right side panel on the editor and
   result screens (no separate page or mode). Entries can be added anytime
   (typed or dictated); on the result screen the chips become clickable and
