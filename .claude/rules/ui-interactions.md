@@ -43,10 +43,14 @@ Interaction invariants:
 
 - Edit-toolbar layout (groups separated by vertical dividers): rotate
   left/right (icon-only) | Mark another photo · Correct boundaries | Shrink
-  border · Delete | Reset (drop all rectangles + auto-detect afresh) |
-  Apply | ZIP split button (zip download style only) | settings cogwheel
-  (icon-only). The result toolbar's rotate buttons are icon-only too and it
-  ends with the same ZIP split button + cogwheel.
+  border · Delete | Reset (drop all rectangles + auto-detect afresh) ·
+  Close image (drop the whole image from the batch, same as the drawer
+  thumb's ×) | Apply | ZIP split button (zip download style only) |
+  settings cogwheel (icon-only). The result toolbar's rotate buttons are
+  icon-only too, it carries the same Close image button (after Close
+  photo — Close photo skips one rectified photo, Close image discards the
+  source image with all its photos), and it ends with the same ZIP split
+  button + cogwheel.
 - Settings live in a modal behind the cogwheel (Esc or backdrop click
   closes): JPG quality slider and the download style radios. The ZIP split
   button's main half downloads the archive, the right segment opens the
@@ -96,7 +100,10 @@ Interaction invariants:
 - Thumbnails refresh on rotate and each has an × remove button, a ✓ badge
   when saved, and a bottom-left count badge with the number of photo
   rectangles on that image. Drawer thumbs never flex-shrink — a full drawer
-  scrolls instead of squashing them.
+  scrolls instead of squashing them. Every image switch (arrow keys, drawer
+  click, save-advance, Close image, newly dropped files) scrolls the new
+  image's thumb into view (`scrollThumbIntoView` in `openImage`) so the
+  drawer always follows the queue.
 - Dropping (or picking) new files opens the first newly added image right
   away, from any screen except mid-warp (`processing`) — current rectangles
   are stashed per queue item, so nothing is lost by the jump.

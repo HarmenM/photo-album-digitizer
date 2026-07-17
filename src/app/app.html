@@ -5,7 +5,7 @@
       class="drawer"
       title="Shortcuts: ← previous photo · → next photo (while picking corners)"
     >
-      <div class="thumbs">
+      <div class="thumbs" #thumbsBox>
         @for (item of images(); track item.id; let i = $index) {
           <button
             class="thumb"
@@ -154,6 +154,13 @@
         >
           <span class="material-symbols-outlined">restart_alt</span> Reset
         </button>
+        <button
+          (click)="closeImage()"
+          [disabled]="mode() === 'processing'"
+          title="Remove this image from the batch — nothing from it is saved"
+        >
+          <span class="material-symbols-outlined">hide_image</span> Close image
+        </button>
         <span class="divider"></span>
         <button
           class="primary"
@@ -234,6 +241,12 @@
         </button>
         <button (click)="closeResult()" title="Close this photo without saving it">
           <span class="material-symbols-outlined">close</span> Close photo
+        </button>
+        <button
+          (click)="closeImage()"
+          title="Remove the whole image from the batch — none of its photos are saved"
+        >
+          <span class="material-symbols-outlined">hide_image</span> Close image
         </button>
         <button
           class="primary"
@@ -582,9 +595,9 @@
                     (blur)="commitTuneField($event)"
                   />
                 } @else {
-                  <b class="editable" (click)="startEditTuneField('black')" title="Click to type"
-                    >{{ tuneLevels().black }}</b
-                  >
+                  <b class="editable" (click)="startEditTuneField('black')" title="Click to type">{{
+                    tuneLevels().black
+                  }}</b>
                 }
               </span>
               <input
@@ -610,9 +623,9 @@
                     (blur)="commitTuneField($event)"
                   />
                 } @else {
-                  <b class="editable" (click)="startEditTuneField('gamma')" title="Click to type"
-                    >{{ tuneLevels().gamma.toFixed(2) }}</b
-                  >
+                  <b class="editable" (click)="startEditTuneField('gamma')" title="Click to type">{{
+                    tuneLevels().gamma.toFixed(2)
+                  }}</b>
                 }
               </span>
               <input
@@ -638,9 +651,9 @@
                     (blur)="commitTuneField($event)"
                   />
                 } @else {
-                  <b class="editable" (click)="startEditTuneField('white')" title="Click to type"
-                    >{{ tuneLevels().white }}</b
-                  >
+                  <b class="editable" (click)="startEditTuneField('white')" title="Click to type">{{
+                    tuneLevels().white
+                  }}</b>
                 }
               </span>
               <input
@@ -668,7 +681,10 @@
                     (blur)="commitTuneField($event)"
                   />
                 } @else {
-                  <b class="editable" (click)="startEditTuneField('brightness')" title="Click to type"
+                  <b
+                    class="editable"
+                    (click)="startEditTuneField('brightness')"
+                    title="Click to type"
                     >{{ tune().brightness }}</b
                   >
                 }
@@ -696,7 +712,10 @@
                     (blur)="commitTuneField($event)"
                   />
                 } @else {
-                  <b class="editable" (click)="startEditTuneField('contrast')" title="Click to type"
+                  <b
+                    class="editable"
+                    (click)="startEditTuneField('contrast')"
+                    title="Click to type"
                     >{{ tune().contrast }}</b
                   >
                 }
@@ -870,8 +889,8 @@
           <button class="x" (click)="cancelMicConsent()" title="Close (shortcut: Esc)">×</button>
         </div>
         <p class="modal-note">
-          Some browsers use an external speech-to-text service. It could be that your voice
-          messages are sent to the cloud.
+          Some browsers use an external speech-to-text service. It could be that your voice messages
+          are sent to the cloud.
         </p>
         <div class="modal-actions">
           <button (click)="cancelMicConsent()">Cancel</button>

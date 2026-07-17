@@ -296,6 +296,8 @@ export class App {
   // the inline click-to-edit number input; only one renders at a time (@if on
   // editingTuneField), so a single shared ref always points at the live one
   private readonly tuneNumInput = viewChild<ElementRef<HTMLInputElement>>('tuneNumInput');
+  // not .required: the drawer only exists while the batch has images
+  private readonly thumbsBox = viewChild<ElementRef<HTMLDivElement>>('thumbsBox');
 
   private image: ImageBitmap | null = null;
   private baseName = 'photo';
@@ -572,13 +574,22 @@ export class App {
     // wait one frame so the edit screen has been laid out before measuring
     requestAnimationFrame(() => {
       this.layoutEditCanvas();
+      this.scrollThumbIntoView(index);
       if (!stored) this.autoDetect(false); // first visit: try to prefill corners
     });
   }
 
+  /** Keep the drawer following the queue: scroll an image's thumbnail into view. */
+  private scrollThumbIntoView(index: number): void {
+    const box = this.thumbsBox()?.nativeElement;
+    box
+      ?.querySelectorAll('.thumb')
+      [index]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
   /** Remove one image from the batch. */
-  protected removeImage(index: number, ev: Event): void {
-    ev.stopPropagation();
+  protected removeImage(index: number, ev?: Event): void {
+    ev?.stopPropagation();
     if (this.mode() === 'processing') return;
     const cur = this.currentIndex();
     const newList = this.images().filter((_, i) => i !== index);
@@ -594,6 +605,12 @@ export class App {
     } else if (index === cur) {
       void this.openImage(Math.min(index, newList.length - 1));
     }
+  }
+
+  /** Toolbar "Close image": drop the current image from the batch, like the drawer's ×. */
+  protected closeImage(): void {
+    const idx = this.currentIndex();
+    if (idx >= 0) this.removeImage(idx);
   }
 
   /** Advance to the next unprocessed image, or the done screen. */
@@ -2515,7 +2532,9 @@ function filterTuneNumInput(v: string, field: TuneNumField): string {
     const cleaned = v.replace(/[^0-9.]/g, '');
     const dot = cleaned.indexOf('.');
     // keep only the first dot
-    return dot < 0 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
+    return dot < 0
+      ? cleaned
+      : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
   }
   const digits = v.replace(/[^0-9]/g, '');
   // brightness/contrast are signed; keep a single leading minus

@@ -21,7 +21,9 @@ browser — your photos never leave your machine.
 ## Features
 
 - **Batch queue** — drop a whole folder of page shots at once; a thumbnail
-  drawer tracks progress with saved-checkmarks and per-page photo counts.
+  drawer tracks progress with saved-checkmarks and per-page photo counts,
+  follows along as you move through the queue, and any image can be dropped
+  from the batch with its thumb's × or the toolbar's Close image button.
 - **Automatic photo detection** — finds every photo on an album page
   (adaptive luminance threshold, Hough line refit, contrast-edge snapping),
   with a Reset button to re-run it after manual changes.
