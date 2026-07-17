@@ -53,6 +53,12 @@ browser — your photos never leave your machine.
   extraction (with a reviewable, removable collection page).
 - **Keyboard-first** — every action has a shortcut (see the table below),
   and every shortcut is shown in its button's tooltip.
+- **Mobile-friendly** — on small screens the app switches to a lean
+  single-image workflow: a "Take a photo" button that opens the camera
+  directly, icon-only buttons, one photo at a time (no queue drawer,
+  scratchpad or ZIP collection), a bottom action bar with the main
+  actions (Apply / Save & next and the way back) in thumb reach, and the
+  image adjustments in a modal behind the preview toolbar's tune button.
 
 ## Keyboard shortcuts
 

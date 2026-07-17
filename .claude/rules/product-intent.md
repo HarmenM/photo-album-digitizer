@@ -42,3 +42,8 @@ photobook shot with a camera or phone).
   require leaving the current photo.
 - Optimize for batch throughput: a user works through a whole queue of photos
   in one sitting, so minimize clicks and keystrokes per photo.
+- **Mobile is the exception**: on small screens (see the mobile section in
+  ui-interactions.md) the app deliberately narrows to a single-image
+  workflow — no queue drawer, no scratchpad, no ZIP collection. The batch
+  workflow above describes the desktop; don't port its multi-image UI to
+  mobile, and don't let mobile simplifications leak back into the desktop.

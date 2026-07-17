@@ -13,6 +13,10 @@
   the download style — `single` (every save downloads its JPG directly)
   or `zip` (saves collect into the batch ZIP; nothing downloads until the
   ZIP button) — and a **require-date** toggle (`dateRequired`, default off).
+  The mobile layout (see ui-interactions.md) hides the download-style radios
+  and forces direct download: template and `save()` read
+  `effectiveDownloadStyle` (mobile ⇒ `'single'`), never `downloadStyle`
+  directly, while the persisted setting stays intact for the desktop.
   The persisted settings JSON also carries `defaultPresetId` (see the tune
   presets in ui-interactions.md). In zip mode a re-processed photo never
   overwrites a collected one: `uniqueZipName` appends `-2`, `-3`, … before

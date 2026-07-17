@@ -1,5 +1,58 @@
 # UI interactions & shortcuts — don't break these
 
+## Mobile layout (single-image workflow)
+
+Below 720 px viewport width — or on a coarse-pointer (touch) device whose
+viewport is at most 500 px tall, which catches large phones in landscape
+while every tablet stays desktop (`MOBILE_QUERY` in `app.ts`) — the app
+switches to a mobile layout. One `matchMedia` query drives both the template
+switches (the `isMobile` signal) and the CSS (a `.mobile` class bound on the
+host) — never introduce a second breakpoint source. On mobile:
+
+- **Single image**: the drawer is not rendered, the file picker is
+  single-select (`[attr.multiple]`), and the whole ZIP flow is hidden AND
+  disabled — template zip checks and `save()` go through
+  `effectiveDownloadStyle` (forced `'single'` on mobile) while the persisted
+  `downloadStyle` setting survives untouched for the desktop; the settings
+  modal hides the download-style radios.
+- **The scratchpad panel is not rendered** — this is the one sanctioned
+  exception to the "always-visible side panel" invariant below (the desktop
+  rule stands).
+- **The tune section moves into the "Image adjustments" modal**, opened by
+  the result toolbar's `tune` icon button (mobile-only). The markup lives
+  once in the `#tunePanelTpl` ng-template, rendered EITHER in the side panel
+  (desktop) or in the modal (mobile) — never both, so the `histCanvas` /
+  `tuneNumInput` viewChild refs stay unambiguous. Esc closes it (after the
+  preset modal, which can sit on top).
+- **Toolbar and meta-bar buttons are icon-only**: every label is wrapped in
+  a `.label` span that mobile CSS hides — keep new button labels in that
+  span, and keep the `title` tooltips carrying the full text.
+- **A bottom action bar (`.mobile-bar`, mobile-only) carries the phase
+  confirm and the way back**, for thumb reach: on the editor **Start over**
+  (= `closeImage()` — the single-image "drop this and pick another") +
+  **Apply**; on the result screen **Back to corners** + **Save & next**.
+  Its buttons keep their text labels (the icon-only rule above is for the
+  top bars). The duplicated top-toolbar buttons — Apply, Close image,
+  Back to corners, Save & next — are template-hidden on mobile
+  (`@if (!isMobile())`), and the edit toolbar's **Reset** is hidden on
+  mobile too (too destructive for a stray tap; detection still runs on
+  first visit). Keep bar and top-bar hiding in sync: a confirm action must
+  exist exactly once on mobile.
+- **Meta bar on mobile**: "Use previous" is not rendered (the single-image
+  flow has no batch of earlier saves worth refilling from), and the mic
+  button sits beside the description field on the same row (the
+  description's `flex-basis` deliberately leaves room for it — don't bump
+  it back to 100%).
+- **"Take a photo" on the drop screen (mobile-only)**: a second hidden file
+  input (`#cameraInput`, `capture="environment"`) opens the rear camera
+  directly and feeds the same `onFileInput` intake. It is deliberately a
+  separate input + button — putting `capture` on the main picker would
+  steal the gallery path on phones. Tapping the rest of the dropzone still
+  opens the regular picker.
+
+All mobile CSS is scoped under `:host(.mobile)` in `app.css`; the desktop
+layout must stay pixel-identical.
+
 Keyboard shortcuts (all surfaced in button tooltips — update the tooltip when
 you change a binding):
 
@@ -155,4 +208,6 @@ Interaction invariants:
   (typed or dictated); on the result screen the chips become clickable and
   fill the metadata fields. It can be collapsed to a slim vertical rail
   (label + entry count, one click re-expands) but never disappears from the
-  screen. Don't move it back behind a mode switch.
+  screen. Don't move it back behind a mode switch. (Sole exception: the
+  mobile single-image layout drops the panel entirely — see the mobile
+  section at the top.)

@@ -1,6 +1,6 @@
 <main class="app">
-  <!-- image drawer -->
-  @if (images().length) {
+  <!-- image drawer (desktop only — mobile is a single-image workflow) -->
+  @if (!isMobile() && images().length) {
     <aside
       class="drawer"
       title="Shortcuts: ← previous photo · → next photo (while picking corners)"
@@ -76,8 +76,25 @@
           />
         </svg>
         <h1>Photo Album Digitizer</h1>
-        <p class="big">Drop your JPG photos anywhere on this tab</p>
-        <p class="muted">or click here to browse — you can add a whole batch</p>
+        @if (isMobile()) {
+          <p class="big">Take a photo of an album page</p>
+          <p class="muted">or tap here to pick one from your photos</p>
+        } @else {
+          <p class="big">Drop your JPG photos anywhere on this tab</p>
+          <p class="muted">or click here to browse — you can add a whole batch</p>
+        }
+        <!-- mobile: the camera is the natural way in on a phone — a dedicated
+             button so the plain tap keeps opening the gallery picker -->
+        @if (isMobile()) {
+          <button
+            class="primary camera-btn"
+            (click)="cameraInput.click(); $event.stopPropagation()"
+            title="Take a photo with the camera"
+          >
+            <span class="material-symbols-outlined">photo_camera</span>
+            Take a photo
+          </button>
+        }
         <p class="privacy">
           <span class="material-symbols-outlined">lock</span> This app is 100% privacy-friendly: all
           images and info are processed locally — nothing ever leaves your computer.
@@ -119,14 +136,16 @@
               : 'Mark a photo by clicking its four corners'
           "
         >
-          <span class="material-symbols-outlined">add_box</span> Mark another photo
+          <span class="material-symbols-outlined">add_box</span>
+          <span class="label">Mark another photo</span>
         </button>
         <button
           (click)="correctBoundaries()"
           [disabled]="activeIdx() < 0 || mode() === 'processing'"
           title="Snap each corner of the active rectangle to the strongest contrast edge (±25 px) — press again within 2 s to search wider: L ±50, XL ±100 (shortcut: C)"
         >
-          <span class="material-symbols-outlined">center_focus_strong</span> Correct boundaries
+          <span class="material-symbols-outlined">center_focus_strong</span>
+          <span class="label">Correct boundaries</span>
           @if (snapBadge(); as b) {
             <span class="snap-badge">{{ b }}</span>
           }
@@ -137,40 +156,49 @@
           [disabled]="activeIdx() < 0 || mode() === 'processing'"
           title="Move every edge of the active rectangle 10 px inward (shortcut: S)"
         >
-          <span class="material-symbols-outlined">zoom_in_map</span> Shrink border
+          <span class="material-symbols-outlined">zoom_in_map</span>
+          <span class="label">Shrink border</span>
         </button>
         <button
           (click)="deleteActive()"
           [disabled]="(activeIdx() < 0 && !drafting()) || mode() === 'processing'"
           title="Delete the active rectangle (shortcut: Delete)"
         >
-          <span class="material-symbols-outlined">delete</span> Delete
+          <span class="material-symbols-outlined">delete</span>
+          <span class="label">Delete</span>
         </button>
-        <span class="divider"></span>
-        <button
-          (click)="resetRectangles()"
-          [disabled]="mode() === 'processing'"
-          title="Remove all rectangles and detect the photos afresh"
-        >
-          <span class="material-symbols-outlined">restart_alt</span> Reset
-        </button>
-        <button
-          (click)="closeImage()"
-          [disabled]="mode() === 'processing'"
-          title="Remove this image from the batch — nothing from it is saved"
-        >
-          <span class="material-symbols-outlined">hide_image</span> Close image
-        </button>
-        <span class="divider"></span>
-        <button
-          class="primary"
-          (click)="apply()"
-          [disabled]="!quads().length || mode() === 'processing'"
-          [title]="'Crop & rectify every rectangle (shortcut: ' + confirmKey + ')'"
-        >
-          <span class="material-symbols-outlined">crop</span> Apply
-        </button>
-        @if (downloadStyle() === 'zip') {
+        <!-- mobile: Reset is hidden (too destructive for a stray tap on a
+             phone) and Close image + Apply live in the bottom action bar -->
+        @if (!isMobile()) {
+          <span class="divider"></span>
+          <button
+            (click)="resetRectangles()"
+            [disabled]="mode() === 'processing'"
+            title="Remove all rectangles and detect the photos afresh"
+          >
+            <span class="material-symbols-outlined">restart_alt</span>
+            <span class="label">Reset</span>
+          </button>
+          <button
+            (click)="closeImage()"
+            [disabled]="mode() === 'processing'"
+            title="Remove this image from the batch — nothing from it is saved"
+          >
+            <span class="material-symbols-outlined">hide_image</span>
+            <span class="label">Close image</span>
+          </button>
+          <span class="divider"></span>
+          <button
+            class="primary"
+            (click)="apply()"
+            [disabled]="!quads().length || mode() === 'processing'"
+            [title]="'Crop & rectify every rectangle (shortcut: ' + confirmKey + ')'"
+          >
+            <span class="material-symbols-outlined">crop</span>
+            <span class="label">Apply</span>
+          </button>
+        }
+        @if (effectiveDownloadStyle() === 'zip') {
           <span class="divider"></span>
           <span class="split-btn">
             <button
@@ -233,36 +261,55 @@
         <button class="icon-only" (click)="rotate(1)" title="Rotate 90° right (shortcut: R)">
           <span class="material-symbols-outlined">rotate_right</span>
         </button>
-        <button
-          (click)="backToEdit()"
-          title="Back to the corner editor (shortcut: Esc or Backspace)"
-        >
-          <span class="material-symbols-outlined">arrow_back</span> Back to corners
-        </button>
+        <!-- mobile: Back to corners lives in the bottom action bar -->
+        @if (!isMobile()) {
+          <button
+            (click)="backToEdit()"
+            title="Back to the corner editor (shortcut: Esc or Backspace)"
+          >
+            <span class="material-symbols-outlined">arrow_back</span>
+            <span class="label">Back to corners</span>
+          </button>
+        }
         <button (click)="closeResult()" title="Close this photo without saving it">
-          <span class="material-symbols-outlined">close</span> Close photo
+          <span class="material-symbols-outlined">close</span>
+          <span class="label">Close photo</span>
         </button>
         <button
           (click)="closeImage()"
           title="Remove the whole image from the batch — none of its photos are saved"
         >
-          <span class="material-symbols-outlined">hide_image</span> Close image
+          <span class="material-symbols-outlined">hide_image</span>
+          <span class="label">Close image</span>
         </button>
-        <button
-          class="primary"
-          (click)="save()"
-          [title]="
-            (downloadStyle() === 'zip'
-              ? 'Add the JPG (with embedded EXIF metadata) to the ZIP collection'
-              : 'Save as JPG with embedded EXIF metadata') +
-            ' and show the next unsaved photo (shortcut: ' +
-            confirmKey +
-            ')'
-          "
-        >
-          <span class="material-symbols-outlined">save</span> Save &amp; next
-        </button>
-        @if (downloadStyle() === 'zip') {
+        @if (isMobile()) {
+          <button
+            class="icon-only"
+            (click)="openTuneModal()"
+            title="Image adjustments — levels, brightness/contrast and presets"
+          >
+            <span class="material-symbols-outlined">tune</span>
+          </button>
+        }
+        <!-- mobile: Save & next lives in the bottom action bar -->
+        @if (!isMobile()) {
+          <button
+            class="primary"
+            (click)="save()"
+            [title]="
+              (effectiveDownloadStyle() === 'zip'
+                ? 'Add the JPG (with embedded EXIF metadata) to the ZIP collection'
+                : 'Save as JPG with embedded EXIF metadata') +
+              ' and show the next unsaved photo (shortcut: ' +
+              confirmKey +
+              ')'
+            "
+          >
+            <span class="material-symbols-outlined">save</span>
+            <span class="label">Save &amp; next</span>
+          </button>
+        }
+        @if (effectiveDownloadStyle() === 'zip') {
           <span class="divider"></span>
           <span class="split-btn">
             <button
@@ -300,7 +347,8 @@
           <input type="time" step="1" [value]="timeField()" (input)="onTimeField($event)" />
         </label>
         <label class="grow">
-          <span class="material-symbols-outlined">notes</span> Description
+          <span class="material-symbols-outlined">notes</span>
+          <span class="label">Description</span>
           <input
             type="text"
             [value]="descriptionField()"
@@ -308,13 +356,18 @@
             placeholder="Describe this photo…"
           />
         </label>
-        <button
-          (click)="usePrevious()"
-          [disabled]="!lastMeta()"
-          title="Fill date, time and description from the last save"
-        >
-          <span class="material-symbols-outlined">undo</span> Use previous
-        </button>
+        <!-- mobile: no Use previous — the single-image flow has no batch of
+             earlier saves worth refilling from -->
+        @if (!isMobile()) {
+          <button
+            (click)="usePrevious()"
+            [disabled]="!lastMeta()"
+            title="Fill date, time and description from the last save"
+          >
+            <span class="material-symbols-outlined">undo</span>
+            <span class="label">Use previous</span>
+          </button>
+        }
         <button
           class="mic"
           [class.recording]="listening()"
@@ -419,12 +472,53 @@
         <button (click)="reset()">Start a new batch</button>
       </div>
     </section>
+
+    <!-- mobile-only bottom action bar: the phase confirm (Apply / Save & next)
+         and the way back (Start over / Back to corners) live here instead of
+         the top toolbar — thumb reach on a phone -->
+    @if (isMobile() && (mode() === 'edit' || mode() === 'processing' || mode() === 'result')) {
+      <nav class="mobile-bar">
+        @if (mode() === 'result') {
+          <button (click)="backToEdit()" title="Back to the corner editor">
+            <span class="material-symbols-outlined">arrow_back</span>
+            Back to corners
+          </button>
+          <button
+            class="primary"
+            (click)="save()"
+            title="Save as JPG with embedded EXIF metadata and show the next unsaved photo"
+          >
+            <span class="material-symbols-outlined">save</span>
+            Save &amp; next
+          </button>
+        } @else {
+          <button
+            (click)="closeImage()"
+            [disabled]="mode() === 'processing'"
+            title="Start over — close this image and pick another"
+          >
+            <span class="material-symbols-outlined">restart_alt</span>
+            Start over
+          </button>
+          <button
+            class="primary"
+            (click)="apply()"
+            [disabled]="!quads().length || mode() === 'processing'"
+            title="Crop & rectify every rectangle"
+          >
+            <span class="material-symbols-outlined">crop</span>
+            Apply
+          </button>
+        }
+      </nav>
+    }
   </div>
 
   <!-- always-visible scratchpad: collect dates & descriptions from any photo,
        reuse them (clickable chips) when saving on the result screen.
-       Collapsible to a slim rail, but never fully hidden -->
-  @if (mode() === 'edit' || mode() === 'processing' || mode() === 'result') {
+       Collapsible to a slim rail, but never fully hidden — except in the
+       mobile single-image layout, which drops the whole side panel -->
+  @if (!isMobile() && (mode() === 'edit' || mode() === 'processing' || mode() === 'result')) {
     @if (scratchCollapsed()) {
       <aside class="scratch-panel collapsed">
         <button class="scratch-rail" (click)="toggleScratchpad()" title="Expand the scratchpad">
@@ -530,263 +624,273 @@
         <!-- image tune: only on the preview (result) step; per rectified photo.
              Sits below the scratchpad, pinned to the panel's bottom edge -->
         @if (mode() === 'result') {
-          <section class="tune">
-            <div class="tune-head">
-              <h3>Color correction</h3>
-              <button
-                class="tune-preview"
-                [class.off]="!tunePreview()"
-                (click)="toggleTunePreview()"
-                [disabled]="tuneNeutral()"
-                [title]="
-                  (tunePreview()
-                    ? 'Showing the tuned photo — click to compare with the original'
-                    : 'Showing the original — click (or move a slider) to show the tuned photo') +
-                  ' (shortcut: B)'
-                "
-              >
-                <span class="material-symbols-outlined">{{
-                  tunePreview() ? 'visibility' : 'visibility_off'
-                }}</span>
-              </button>
-              <button
-                class="tune-reset"
-                (click)="resetTune()"
-                [disabled]="tuneNeutral()"
-                title="Reset levels, brightness and contrast for this photo"
-              >
-                <span class="material-symbols-outlined">restart_alt</span> Reset
-              </button>
-            </div>
-            <div class="tune-channels">
-              @for (c of tuneChannelIds; track c) {
-                <button
-                  [class.active]="tuneChannel() === c"
-                  (click)="setTuneChannel(c)"
-                  [title]="
-                    'Levels for the ' +
-                    (c === 'rgb' ? 'combined RGB' : c.toUpperCase()) +
-                    ' channel'
-                  "
-                >
-                  {{ c === 'rgb' ? 'RGB' : c.toUpperCase() }}
-                  @if (channelTuned(c)) {
-                    <span class="dot"></span>
-                  }
-                </button>
-              }
-            </div>
-            <canvas #histCanvas class="tune-hist"></canvas>
-            <!-- The <b> readouts double as click-to-type fields: clicking one
-                 swaps it for a digit-only input (see startEditTuneField). The
-                 rows are <div>, not <label> — a <label> would forward a click
-                 on the number to the range slider. -->
-            <div class="tune-slider">
-              <span
-                >Black point
-                @if (editingTuneField() === 'black') {
-                  <input
-                    #tuneNumInput
-                    class="tune-num"
-                    type="text"
-                    inputmode="numeric"
-                    (input)="onTuneNumInput($event)"
-                    (keydown)="onTuneNumKeydown($event)"
-                    (blur)="commitTuneField($event)"
-                  />
-                } @else {
-                  <b class="editable" (click)="startEditTuneField('black')" title="Click to type">{{
-                    tuneLevels().black
-                  }}</b>
-                }
-              </span>
-              <input
-                type="range"
-                min="0"
-                max="254"
-                step="1"
-                [value]="tuneLevels().black"
-                (input)="onTuneLevel('black', $event)"
-              />
-            </div>
-            <div class="tune-slider">
-              <span
-                >Midtones (gamma)
-                @if (editingTuneField() === 'gamma') {
-                  <input
-                    #tuneNumInput
-                    class="tune-num"
-                    type="text"
-                    inputmode="decimal"
-                    (input)="onTuneNumInput($event)"
-                    (keydown)="onTuneNumKeydown($event)"
-                    (blur)="commitTuneField($event)"
-                  />
-                } @else {
-                  <b class="editable" (click)="startEditTuneField('gamma')" title="Click to type">{{
-                    tuneLevels().gamma.toFixed(2)
-                  }}</b>
-                }
-              </span>
-              <input
-                type="range"
-                min="-100"
-                max="100"
-                step="1"
-                [value]="gammaSliderValue()"
-                (input)="onTuneLevel('gamma', $event)"
-              />
-            </div>
-            <div class="tune-slider">
-              <span
-                >White point
-                @if (editingTuneField() === 'white') {
-                  <input
-                    #tuneNumInput
-                    class="tune-num"
-                    type="text"
-                    inputmode="numeric"
-                    (input)="onTuneNumInput($event)"
-                    (keydown)="onTuneNumKeydown($event)"
-                    (blur)="commitTuneField($event)"
-                  />
-                } @else {
-                  <b class="editable" (click)="startEditTuneField('white')" title="Click to type">{{
-                    tuneLevels().white
-                  }}</b>
-                }
-              </span>
-              <input
-                type="range"
-                min="1"
-                max="255"
-                step="1"
-                [value]="tuneLevels().white"
-                (input)="onTuneLevel('white', $event)"
-              />
-            </div>
-            <!-- levels above, legacy brightness/contrast below — separate adjustments -->
-            <hr class="tune-divider" />
-            <div class="tune-slider">
-              <span
-                >Brightness
-                @if (editingTuneField() === 'brightness') {
-                  <input
-                    #tuneNumInput
-                    class="tune-num"
-                    type="text"
-                    inputmode="numeric"
-                    (input)="onTuneNumInput($event)"
-                    (keydown)="onTuneNumKeydown($event)"
-                    (blur)="commitTuneField($event)"
-                  />
-                } @else {
-                  <b
-                    class="editable"
-                    (click)="startEditTuneField('brightness')"
-                    title="Click to type"
-                    >{{ tune().brightness }}</b
-                  >
-                }
-              </span>
-              <input
-                type="range"
-                min="-100"
-                max="100"
-                step="1"
-                [value]="tune().brightness"
-                (input)="onTuneBC('brightness', $event)"
-              />
-            </div>
-            <div class="tune-slider">
-              <span
-                >Contrast
-                @if (editingTuneField() === 'contrast') {
-                  <input
-                    #tuneNumInput
-                    class="tune-num"
-                    type="text"
-                    inputmode="numeric"
-                    (input)="onTuneNumInput($event)"
-                    (keydown)="onTuneNumKeydown($event)"
-                    (blur)="commitTuneField($event)"
-                  />
-                } @else {
-                  <b
-                    class="editable"
-                    (click)="startEditTuneField('contrast')"
-                    title="Click to type"
-                    >{{ tune().contrast }}</b
-                  >
-                }
-              </span>
-              <input
-                type="range"
-                min="-100"
-                max="100"
-                step="1"
-                [value]="tune().contrast"
-                (input)="onTuneBC('contrast', $event)"
-              />
-            </div>
-            <div class="tune-actions">
-              <button
-                (click)="useLastTune()"
-                [disabled]="!lastTune()"
-                title="Apply the last configured tune settings (shortcut: U)"
-              >
-                <span class="material-symbols-outlined">undo</span> Use last settings
-              </button>
-              <button
-                (click)="openPresetModal()"
-                [disabled]="tuneNeutral()"
-                title="Save the current settings as a named preset"
-              >
-                <span class="material-symbols-outlined">add</span> Save preset
-              </button>
-            </div>
-            @if (tunePresets().length) {
-              <div class="entries tune-presets">
-                @for (p of tunePresets(); track p.id; let i = $index) {
-                  <span
-                    class="chip static apply"
-                    (click)="applyTunePreset(p)"
-                    [title]="
-                      'Apply this preset' +
-                      (i < 5 ? ' (shortcut: ' + presetKeyPrefix + (i + 1) + ')' : '')
-                    "
-                  >
-                    <button
-                      class="preset-star"
-                      [class.on]="defaultPresetId() === p.id"
-                      (click)="toggleDefaultPreset(p, $event)"
-                      [title]="
-                        defaultPresetId() === p.id
-                          ? 'Default preset for every photo — click to clear'
-                          : 'Make this the default preset applied to every photo'
-                      "
-                    >
-                      <span class="material-symbols-outlined">star</span>
-                    </button>
-                    @if (i < 5) {
-                      <b class="preset-num">{{ i + 1 }}</b>
-                    }
-                    {{ p.name }}
-                    <button
-                      class="x"
-                      (click)="removeTunePreset(p.id, $event)"
-                      title="Remove this preset"
-                    >
-                      ×
-                    </button>
-                  </span>
-                }
-              </div>
-            }
-          </section>
+          <ng-container [ngTemplateOutlet]="tunePanelTpl" />
         }
       </aside>
     }
+  }
+
+  <!-- The tune section, rendered in exactly one of two places: the side
+       panel above (desktop) or the image-adjustments modal (mobile) -->
+  <ng-template #tunePanelTpl>
+    <section class="tune">
+      <div class="tune-head">
+        <h3>Color correction</h3>
+        <button
+          class="tune-preview"
+          [class.off]="!tunePreview()"
+          (click)="toggleTunePreview()"
+          [disabled]="tuneNeutral()"
+          [title]="
+            (tunePreview()
+              ? 'Showing the tuned photo — click to compare with the original'
+              : 'Showing the original — click (or move a slider) to show the tuned photo') +
+            ' (shortcut: B)'
+          "
+        >
+          <span class="material-symbols-outlined">{{
+            tunePreview() ? 'visibility' : 'visibility_off'
+          }}</span>
+        </button>
+        <button
+          class="tune-reset"
+          (click)="resetTune()"
+          [disabled]="tuneNeutral()"
+          title="Reset levels, brightness and contrast for this photo"
+        >
+          <span class="material-symbols-outlined">restart_alt</span> Reset
+        </button>
+      </div>
+      <div class="tune-channels">
+        @for (c of tuneChannelIds; track c) {
+          <button
+            [class.active]="tuneChannel() === c"
+            (click)="setTuneChannel(c)"
+            [title]="
+              'Levels for the ' + (c === 'rgb' ? 'combined RGB' : c.toUpperCase()) + ' channel'
+            "
+          >
+            {{ c === 'rgb' ? 'RGB' : c.toUpperCase() }}
+            @if (channelTuned(c)) {
+              <span class="dot"></span>
+            }
+          </button>
+        }
+      </div>
+      <canvas #histCanvas class="tune-hist"></canvas>
+      <!-- The <b> readouts double as click-to-type fields: clicking one
+                 swaps it for a digit-only input (see startEditTuneField). The
+                 rows are <div>, not <label> — a <label> would forward a click
+                 on the number to the range slider. -->
+      <div class="tune-slider">
+        <span
+          >Black point
+          @if (editingTuneField() === 'black') {
+            <input
+              #tuneNumInput
+              class="tune-num"
+              type="text"
+              inputmode="numeric"
+              (input)="onTuneNumInput($event)"
+              (keydown)="onTuneNumKeydown($event)"
+              (blur)="commitTuneField($event)"
+            />
+          } @else {
+            <b class="editable" (click)="startEditTuneField('black')" title="Click to type">{{
+              tuneLevels().black
+            }}</b>
+          }
+        </span>
+        <input
+          type="range"
+          min="0"
+          max="254"
+          step="1"
+          [value]="tuneLevels().black"
+          (input)="onTuneLevel('black', $event)"
+        />
+      </div>
+      <div class="tune-slider">
+        <span
+          >Midtones (gamma)
+          @if (editingTuneField() === 'gamma') {
+            <input
+              #tuneNumInput
+              class="tune-num"
+              type="text"
+              inputmode="decimal"
+              (input)="onTuneNumInput($event)"
+              (keydown)="onTuneNumKeydown($event)"
+              (blur)="commitTuneField($event)"
+            />
+          } @else {
+            <b class="editable" (click)="startEditTuneField('gamma')" title="Click to type">{{
+              tuneLevels().gamma.toFixed(2)
+            }}</b>
+          }
+        </span>
+        <input
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          [value]="gammaSliderValue()"
+          (input)="onTuneLevel('gamma', $event)"
+        />
+      </div>
+      <div class="tune-slider">
+        <span
+          >White point
+          @if (editingTuneField() === 'white') {
+            <input
+              #tuneNumInput
+              class="tune-num"
+              type="text"
+              inputmode="numeric"
+              (input)="onTuneNumInput($event)"
+              (keydown)="onTuneNumKeydown($event)"
+              (blur)="commitTuneField($event)"
+            />
+          } @else {
+            <b class="editable" (click)="startEditTuneField('white')" title="Click to type">{{
+              tuneLevels().white
+            }}</b>
+          }
+        </span>
+        <input
+          type="range"
+          min="1"
+          max="255"
+          step="1"
+          [value]="tuneLevels().white"
+          (input)="onTuneLevel('white', $event)"
+        />
+      </div>
+      <!-- levels above, legacy brightness/contrast below — separate adjustments -->
+      <hr class="tune-divider" />
+      <div class="tune-slider">
+        <span
+          >Brightness
+          @if (editingTuneField() === 'brightness') {
+            <input
+              #tuneNumInput
+              class="tune-num"
+              type="text"
+              inputmode="numeric"
+              (input)="onTuneNumInput($event)"
+              (keydown)="onTuneNumKeydown($event)"
+              (blur)="commitTuneField($event)"
+            />
+          } @else {
+            <b class="editable" (click)="startEditTuneField('brightness')" title="Click to type">{{
+              tune().brightness
+            }}</b>
+          }
+        </span>
+        <input
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          [value]="tune().brightness"
+          (input)="onTuneBC('brightness', $event)"
+        />
+      </div>
+      <div class="tune-slider">
+        <span
+          >Contrast
+          @if (editingTuneField() === 'contrast') {
+            <input
+              #tuneNumInput
+              class="tune-num"
+              type="text"
+              inputmode="numeric"
+              (input)="onTuneNumInput($event)"
+              (keydown)="onTuneNumKeydown($event)"
+              (blur)="commitTuneField($event)"
+            />
+          } @else {
+            <b class="editable" (click)="startEditTuneField('contrast')" title="Click to type">{{
+              tune().contrast
+            }}</b>
+          }
+        </span>
+        <input
+          type="range"
+          min="-100"
+          max="100"
+          step="1"
+          [value]="tune().contrast"
+          (input)="onTuneBC('contrast', $event)"
+        />
+      </div>
+      <div class="tune-actions">
+        <button
+          (click)="useLastTune()"
+          [disabled]="!lastTune()"
+          title="Apply the last configured tune settings (shortcut: U)"
+        >
+          <span class="material-symbols-outlined">undo</span> Use last settings
+        </button>
+        <button
+          (click)="openPresetModal()"
+          [disabled]="tuneNeutral()"
+          title="Save the current settings as a named preset"
+        >
+          <span class="material-symbols-outlined">add</span> Save preset
+        </button>
+      </div>
+      @if (tunePresets().length) {
+        <div class="entries tune-presets">
+          @for (p of tunePresets(); track p.id; let i = $index) {
+            <span
+              class="chip static apply"
+              (click)="applyTunePreset(p)"
+              [title]="
+                'Apply this preset' +
+                (i < 5 ? ' (shortcut: ' + presetKeyPrefix + (i + 1) + ')' : '')
+              "
+            >
+              <button
+                class="preset-star"
+                [class.on]="defaultPresetId() === p.id"
+                (click)="toggleDefaultPreset(p, $event)"
+                [title]="
+                  defaultPresetId() === p.id
+                    ? 'Default preset for every photo — click to clear'
+                    : 'Make this the default preset applied to every photo'
+                "
+              >
+                <span class="material-symbols-outlined">star</span>
+              </button>
+              @if (i < 5) {
+                <b class="preset-num">{{ i + 1 }}</b>
+              }
+              {{ p.name }}
+              <button class="x" (click)="removeTunePreset(p.id, $event)" title="Remove this preset">
+                ×
+              </button>
+            </span>
+          }
+        </div>
+      }
+    </section>
+  </ng-template>
+
+  <!-- mobile: image adjustments (the tune + presets) in a modal, opened from
+       the result toolbar's tune button — the side panel is hidden there -->
+  @if (tuneModalOpen()) {
+    <div class="modal-backdrop" (click)="tuneModalOpen.set(false)">
+      <div class="modal tune-modal" (click)="$event.stopPropagation()">
+        <div class="modal-head">
+          <h2>Image adjustments</h2>
+          <button class="x" (click)="tuneModalOpen.set(false)" title="Close (shortcut: Esc)">
+            ×
+          </button>
+        </div>
+        <ng-container [ngTemplateOutlet]="tunePanelTpl" />
+      </div>
+    </div>
   }
 
   <!-- settings modal (cogwheel in the toolbars) -->
@@ -828,27 +932,31 @@
           />
           Require a date — refuse to save a photo whose date field is empty
         </label>
-        <div class="setting-label">Download style</div>
-        <div class="radio-group">
-          <label>
-            <input
-              type="radio"
-              name="download-style"
-              [checked]="downloadStyle() === 'single'"
-              (change)="downloadStyle.set('single')"
-            />
-            Direct download — every save downloads its JPG
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="download-style"
-              [checked]="downloadStyle() === 'zip'"
-              (change)="downloadStyle.set('zip')"
-            />
-            Collect into ZIP — saves collect; download one ZIP whose files carry the photo dates
-          </label>
-        </div>
+        <!-- the ZIP flow is a batch feature: the mobile single-image layout
+             hides it (saves always download directly there) -->
+        @if (!isMobile()) {
+          <div class="setting-label">Download style</div>
+          <div class="radio-group">
+            <label>
+              <input
+                type="radio"
+                name="download-style"
+                [checked]="downloadStyle() === 'single'"
+                (change)="downloadStyle.set('single')"
+              />
+              Direct download — every save downloads its JPG
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="download-style"
+                [checked]="downloadStyle() === 'zip'"
+                (change)="downloadStyle.set('zip')"
+              />
+              Collect into ZIP — saves collect; download one ZIP whose files carry the photo dates
+            </label>
+          </div>
+        }
       </div>
     </div>
   }
@@ -900,5 +1008,23 @@
     </div>
   }
 
-  <input #fileInput type="file" accept="image/*" multiple hidden (change)="onFileInput($event)" />
+  <!-- mobile is single-image: the picker allows one file at a time there -->
+  <input
+    #fileInput
+    type="file"
+    accept="image/*"
+    [attr.multiple]="isMobile() ? null : ''"
+    hidden
+    (change)="onFileInput($event)"
+  />
+  <!-- mobile "Take a photo": capture opens the rear camera directly; kept as
+       a second input so the regular picker still reaches the gallery -->
+  <input
+    #cameraInput
+    type="file"
+    accept="image/*"
+    capture="environment"
+    hidden
+    (change)="onFileInput($event)"
+  />
 </main>

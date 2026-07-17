@@ -1122,6 +1122,115 @@ button.tune-preview.off {
   accent-color: #22d3ee;
 }
 
+/* --- the tune section inside the mobile image-adjustments modal: the
+   panel-specific chrome (pinned to the panel bottom, divider on top) is
+   replaced by the modal's own header --- */
+
+.tune-modal .tune {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.tune-modal .tune-head h3 {
+  display: none; /* the modal header already names the section */
+}
+
+.tune-modal .tune-head {
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* --- mobile layout: .mobile lands on the host via MOBILE_QUERY (app.ts) —
+   single-image workflow (drawer/scratchpad/ZIP are not rendered at all),
+   icon-only buttons, tighter chrome. Everything is scoped under the class
+   so the desktop layout stays untouched. --- */
+
+/* icon-only buttons: every toolbar/meta-bar label sits in a .label span so
+   one rule drops them all; the title tooltips still carry the full text */
+:host(.mobile) .toolbar .label,
+:host(.mobile) .meta-bar .label {
+  display: none;
+}
+
+/* square padding, like .icon-only, once the labels are gone */
+:host(.mobile) .toolbar button,
+:host(.mobile) .meta-bar button {
+  padding: 0.5rem 0.6rem;
+}
+
+:host(.mobile) .toolbar,
+:host(.mobile) .meta-bar {
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+}
+
+/* the hint line would push the icon row onto a second line */
+:host(.mobile) .hint {
+  display: none;
+}
+
+:host(.mobile) .canvas-host {
+  padding: 0.5rem;
+}
+
+/* metadata fields: date + time share a row; the description wraps onto the
+   next and grows, leaving just enough basis-room for the mic beside it */
+:host(.mobile) .meta-bar label.grow {
+  min-width: 0;
+  flex: 1 1 70%;
+}
+
+:host(.mobile) .dropzone {
+  margin: auto 1rem;
+  padding: 2.5rem 1.25rem;
+}
+
+/* "Take a photo" on the drop screen: the camera is the primary way in on a
+   phone, so it gets a real button-sized tap target below the browse text */
+:host(.mobile) .camera-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 1.1rem;
+  padding: 0.65rem 1.3rem;
+  font-size: 1rem;
+}
+
+/* bottom action bar: the phase confirm (Apply / Save & next) and the way
+   back (Start over / Back to corners), pulled out of the top toolbar for
+   thumb reach — the duplicated top-bar buttons are template-hidden */
+:host(.mobile) .mobile-bar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  /* keep the buttons clear of the iOS home-indicator strip */
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  background: #1e293b;
+  border-top: 1px solid #334155;
+}
+
+:host(.mobile) .mobile-bar button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.65rem 0.6rem;
+}
+
+:host(.mobile) .mobile-bar .material-symbols-outlined {
+  font-size: 1.15rem;
+}
+
+/* modals never exceed the phone viewport */
+:host(.mobile) .modal {
+  box-sizing: border-box;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+
 /* --- done screen --- */
 
 .done-box {

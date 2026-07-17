@@ -1,3 +1,4 @@
+import { NgTemplateOutlet } from '@angular/common';
 import {
   Component,
   ElementRef,
@@ -30,6 +31,17 @@ import { amsterdamOffset } from './xmp';
 import { ZipEntry, buildZip } from './zip';
 
 type Mode = 'idle' | 'edit' | 'processing' | 'result' | 'collection' | 'done';
+
+// When this matches the app switches to the mobile layout: a single-image
+// workflow (no drawer, no scratchpad, no ZIP flow), icon-only buttons, and
+// the image adjustments in a modal. One matchMedia query drives both the
+// template switches (isMobile) and the CSS (the host's .mobile class), so
+// behavior and styling can never disagree on the breakpoint.
+// Two legs: narrow viewports (phones portrait, narrowed windows), plus
+// short coarse-pointer viewports — a large phone in landscape is 800+ px
+// wide and would otherwise get the desktop UI (tablets stay desktop: even
+// an iPad Mini landscape is 744 px tall, well past the 500 px cap).
+const MOBILE_QUERY = '(max-width: 720px), ((pointer: coarse) and (max-height: 500px))';
 type ImageStatus = 'pending' | 'saved';
 type DownloadStyle = 'single' | 'zip';
 
@@ -118,9 +130,15 @@ const SNAP_FLASH_MS = 1000; // how long the search-area circles stay visible
   selector: 'app-root',
   templateUrl: './app.html',
   styleUrl: './app.css',
+  imports: [NgTemplateOutlet],
+  // the CSS side of the mobile layout hangs off this class (see MOBILE_QUERY)
+  host: { '[class.mobile]': 'isMobile()' },
 })
 export class App {
   protected readonly mode = signal<Mode>('idle');
+  // mobile layout (see MOBILE_QUERY); tracks live so rotating/resizing switches
+  private readonly mobileMedia = matchMedia(MOBILE_QUERY);
+  protected readonly isMobile = signal(this.mobileMedia.matches);
   protected readonly dragOver = signal(false);
   // photo rectangles on the current image; one is active and editable
   protected readonly quads = signal<Point[][]>([]);
@@ -153,6 +171,9 @@ export class App {
   // named tunes for reuse across sessions (persisted in localStorage)
   protected readonly tunePresets = signal<TunePreset[]>([]);
   protected readonly presetModalOpen = signal(false);
+  // mobile: the side panel is hidden, so the tune section renders in a modal
+  // behind the result toolbar's adjustments button instead
+  protected readonly tuneModalOpen = signal(false);
   private presetId = 0;
   // which slider readout is currently being typed into (click-to-edit); the
   // matching <b> is swapped for a digit-only input while set
@@ -190,6 +211,12 @@ export class App {
   protected readonly settingsOpen = signal(false);
   protected readonly jpegQuality = signal(DEFAULT_JPEG_QUALITY);
   protected readonly downloadStyle = signal<DownloadStyle>('single');
+  // what the toolbars and save() act on: the ZIP flow is a batch feature, so
+  // the mobile (single-image) layout hides its settings and always saves
+  // directly — the persisted preference survives untouched for the desktop
+  protected readonly effectiveDownloadStyle = computed<DownloadStyle>(() =>
+    this.isMobile() ? 'single' : this.downloadStyle(),
+  );
   // appended to the source name in saved file names (may be empty)
   protected readonly filenameSuffix = signal(DEFAULT_FILENAME_SUFFIX);
   // when set, a save with an empty date field is refused (see save())
@@ -420,6 +447,16 @@ export class App {
       } else if (was === 'result' && mode !== 'result' && history.state?.resultScreen) {
         history.back();
       }
+    });
+    // live layout switch (resize / device rotation): the tune section moves
+    // between the side panel and its modal, so redraw what depends on it
+    this.mobileMedia.addEventListener('change', (e) => {
+      this.isMobile.set(e.matches);
+      this.tuneModalOpen.set(false); // the desktop panel takes over; mobile reopens via the button
+      requestAnimationFrame(() => {
+        this.relayoutPreview();
+        this.scheduleHistogramDraw();
+      });
     });
   }
 
@@ -1066,6 +1103,12 @@ export class App {
     return !isNeutralLevels(this.tune().levels[c]);
   }
 
+  /** Mobile: the tune section lives in a modal (the side panel is hidden). */
+  protected openTuneModal(): void {
+    this.tuneModalOpen.set(true);
+    this.scheduleHistogramDraw(); // the modal's canvas enters the DOM this frame
+  }
+
   protected setTuneChannel(c: TuneChannel): void {
     this.editingTuneField.set(null); // a levels edit belongs to the channel it was opened on
     this.tuneChannel.set(c);
@@ -1430,6 +1473,13 @@ export class App {
     }
     if (ev.key === 'Escape' && this.presetModalOpen()) {
       this.presetModalOpen.set(false);
+      return;
+    }
+    // after the preset modal — Save preset opens it on top of this one
+    if (ev.key === 'Escape' && this.tuneModalOpen()) {
+      // a click-to-edit readout is open: the first Esc only cancels that edit
+      // (onTuneNumKeydown blurred it already); the second closes the modal
+      if (!this.editingTuneField()) this.tuneModalOpen.set(false);
       return;
     }
     if (ev.key === 'Escape' && this.micConsentOpen()) {
@@ -2339,7 +2389,7 @@ export class App {
             });
           }
           const name = `${this.baseName}${this.filenameSuffix()}${suffix}.jpg`;
-          if (this.downloadStyle() === 'zip') {
+          if (this.effectiveDownloadStyle() === 'zip') {
             // collect for the batch ZIP, stamped with the photo's moment; a
             // photo processed again joins under a higher number suffix
             const entry: CollectedPhoto = {
